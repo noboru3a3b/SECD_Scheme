@@ -23,5 +23,5 @@ The actual actions taken are as follows:
 
 - During this time, GitHub Copilot acted as a hands-on AI, handling the implementation, testing, and debugging of the C++ version.
 
-So, as you can see, SECD_Scheme is not something I created, but rather a C++ version of Scheme compiler using the complete SECD VM method, developed through the collaboration of various AIs.
+SECD_Scheme is not something I created, but rather a C++ version of Scheme compiler using the complete SECD VM method, developed through the collaboration of various AIs.
 
