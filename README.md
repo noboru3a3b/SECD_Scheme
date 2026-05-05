@@ -62,10 +62,10 @@ gcc version 15.2.0 (GCC)
 ```
 
 Installing the compiler on Windows 11 was done using w64devkit.  
-
-Download and extract boost_1_91_0.zip and place it directly under the directory c:\.
-C:\boost_1_91_0
-
+  
+Download and extract boost_1_91_0.zip and place it directly under the directory c:\.  
+C:\boost_1_91_0  
+  
 ## Usage:  
 ```
 PS C:\Users\user\SECD_Scheme> make clean  
