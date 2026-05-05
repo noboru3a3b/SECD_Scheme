@@ -28,6 +28,7 @@ SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler 
 I have built and tested this on clang++ on Ubuntu-24.04 and FreeBSD 15.0-RELEASE, and g++ on Windows 11.
 
 Compiler on Ubuntu:  
+```
 > clang++ -v  
 Ubuntu clang version 18.1.3 (1ubuntu1)  
 Target: x86_64-pc-linux-gnu  
@@ -38,15 +39,17 @@ Found candidate GCC installation: /usr/bin/../lib/gcc/x86_64-linux-gnu/14
 Selected GCC installation: /usr/bin/../lib/gcc/x86_64-linux-gnu/14  
 Candidate multilib: .;@m64  
 Selected multilib: .;@m64  
-
+```
 Compiler on FreeBSD:  
+```
 > clang++ -v  
 FreeBSD clang version 19.1.7 (https://github.com/llvm/llvm-project.git llvmorg-19.1.7-0-gcd708029e0b2)  
 Target: x86_64-unknown-freebsd15.0  
 Thread model: posix  
 InstalledDir: /.bastille/usr/bin  
-
+```
 Compiler on Windows 11:  
+```
 > g++ -v  
 Using built-in specs.  
 COLLECT_GCC=C:\w64devkit\bin\g++.exe  
@@ -56,6 +59,7 @@ Configured with: /dl/gcc/configure --prefix=/w64devkit --with-sysroot=/w64devkit
 Thread model: posix  
 Supported LTO compression algorithms: zlib  
 gcc version 15.2.0 (GCC)  
+```
 
 Installing the compiler on Windows 11 was done using w64devkit.  
 
