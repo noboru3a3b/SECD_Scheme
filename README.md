@@ -16,7 +16,7 @@ The actual actions taken are as follows:
 - As a result, a C++ version of the Scheme compiler started working, which could process everything on the VM (although garbage collection was done using a reference counter method).
 
 - At this point, there weren't many working primitives, but the fact that multi-shot continuations were handled entirely by the SECD VM was a significant advantage.
-- 
+
 - Afterwards, I consulted with another AI (Claude 4.5 Sonnet) and had them switch the GC from a reference counter-based approach to using Boehm GC.
 
 - I also consulted with him about infinite-precision integers, and he implemented infinite-precision integers using the Boost library.
