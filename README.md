@@ -21,7 +21,7 @@ The actual actions taken are as follows:
 
 - I also consulted with him about infinite-precision integers, and he implemented infinite-precision integers using the Boost library.
 
-- During this time, GitHub Copilot acted as a hands-on GC, handling the implementation, testing, and debugging of the C++ version.
+- During this time, GitHub Copilot acted as a hands-on AI, handling the implementation, testing, and debugging of the C++ version.
 
 So, as you can see, SECD_Scheme is not something I created, but rather a C++ version of Scheme compiler using the complete SECD VM method, developed through the collaboration of various AIs.
 
