@@ -19,7 +19,7 @@ The actual actions taken are as follows:
 
 - Afterwards, I consulted with another AI (Claude 4.5 Sonnet) and had them switch the GC from a reference counter-based approach to using Boehm GC.
 
-- I also consulted with them about infinite-precision integers, and they implemented infinite-precision integers using the Boost library.
+- I also consulted with him about infinite-precision integers, and they implemented infinite-precision integers using the Boost library.
 
 - During this time, GitHub Copilot acted as a hands-on GC, handling the implementation, testing, and debugging of the C++ version.
 
