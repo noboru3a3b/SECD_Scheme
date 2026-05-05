@@ -1440,6 +1440,99 @@ static ValuePtr prim_eq(const ValueVec& args) {
     return make_bool(false);
 }
 
+static ValuePtr prim_eqv(const ValueVec& args) {
+    return prim_eq(args);
+}
+
+static bool is_proper_list(ValuePtr v) {
+    ValuePtr slow = v;
+    ValuePtr fast = v;
+    while (true) {
+        if (is_nil(fast)) return true;
+        if (!is_pair(fast)) return false;
+        fast = cdr(fast);
+        if (is_nil(fast)) return true;
+        if (!is_pair(fast)) return false;
+        fast = cdr(fast);
+        if (!is_pair(slow)) return false;
+        slow = cdr(slow);
+        if (slow == fast) return false;
+    }
+}
+
+static bool value_equal(ValuePtr a, ValuePtr b) {
+    if (a == b) return true;
+    if (is_nil(a) || is_nil(b)) return is_nil(a) && is_nil(b);
+    if (std::holds_alternative<bool>(a->data) && std::holds_alternative<bool>(b->data)) {
+        return std::get<bool>(a->data) == std::get<bool>(b->data);
+    }
+    if (std::holds_alternative<BigIntPtr>(a->data) && std::holds_alternative<BigIntPtr>(b->data)) {
+        return as_int(a) == as_int(b);
+    }
+    if (std::holds_alternative<std::string>(a->data) && std::holds_alternative<std::string>(b->data)) {
+        return std::get<std::string>(a->data) == std::get<std::string>(b->data);
+    }
+    if (std::holds_alternative<Symbol>(a->data) && std::holds_alternative<Symbol>(b->data)) {
+        return std::get<Symbol>(a->data).name == std::get<Symbol>(b->data).name;
+    }
+    if (std::holds_alternative<PairPtr>(a->data) && std::holds_alternative<PairPtr>(b->data)) {
+        return value_equal(car(a), car(b)) && value_equal(cdr(a), cdr(b));
+    }
+    return false;
+}
+
+static ValuePtr prim_equal(const ValueVec& args) {
+    if (args.size() != 2) return make_bool(false);
+    return make_bool(value_equal(args[0], args[1]));
+}
+
+static ValuePtr prim_symbolp(const ValueVec& args) {
+    if (args.size() != 1) vm_error("symbol? expects 1 arg");
+    return make_bool(args[0] && std::holds_alternative<Symbol>(args[0]->data));
+}
+
+static ValuePtr prim_numberp(const ValueVec& args) {
+    if (args.size() != 1) vm_error("number? expects 1 arg");
+    return make_bool(args[0] && std::holds_alternative<BigIntPtr>(args[0]->data));
+}
+
+static ValuePtr prim_booleanp(const ValueVec& args) {
+    if (args.size() != 1) vm_error("boolean? expects 1 arg");
+    return make_bool(args[0] && std::holds_alternative<bool>(args[0]->data));
+}
+
+static ValuePtr prim_procedurep(const ValueVec& args) {
+    if (args.size() != 1) vm_error("procedure? expects 1 arg");
+    ValuePtr v = args[0];
+    if (!v) return make_bool(false);
+    return make_bool(
+        std::holds_alternative<PrimitiveFn>(v->data) ||
+        std::holds_alternative<ClosurePtr>(v->data) ||
+        std::holds_alternative<ContPtr>(v->data));
+}
+
+static ValuePtr prim_listp(const ValueVec& args) {
+    if (args.size() != 1) vm_error("list? expects 1 arg");
+    return make_bool(is_proper_list(args[0]));
+}
+
+static ValuePtr prim_atomp(const ValueVec& args) {
+    if (args.size() != 1) vm_error("atom? expects 1 arg");
+    return make_bool(!is_pair(args[0]));
+}
+
+static ValuePtr prim_length(const ValueVec& args) {
+    if (args.size() != 1) vm_error("length expects 1 arg");
+    ValuePtr ls = args[0];
+    if (!is_proper_list(ls)) vm_error("length expects proper list");
+    BigInt n(0);
+    while (!is_nil(ls)) {
+        n = n + BigInt(1);
+        ls = cdr(ls);
+    }
+    return make_int(n);
+}
+
 static ValuePtr prim_not(const ValueVec& args) {
     if (args.size() != 1) vm_error("not expects 1 arg");
     return make_bool(!is_true(args[0]));
@@ -1594,12 +1687,10 @@ static void load_startup_libraries(const char* argv0) {
         if (!ec) {
             std::filesystem::path exe_dir = exe_path.parent_path();
             candidates.push_back((exe_dir / "system_lib.scm").string());
-            candidates.push_back((exe_dir / "mlib9.scm").string());
         }
     }
 
     candidates.push_back("system_lib.scm");
-    candidates.push_back("mlib9.scm");
 
     for (const auto& path : candidates) {
         try {
@@ -1651,7 +1742,16 @@ static void init_globals() {
     g_globals["append"] = make_prim(prim_append);
     g_globals["load"] = make_prim(prim_load);
     g_globals["eq?"] = make_prim(prim_eq);
+    g_globals["eqv?"] = make_prim(prim_eqv);
+    g_globals["equal?"] = make_prim(prim_equal);
     g_globals["not"] = make_prim(prim_not);
+    g_globals["symbol?"] = make_prim(prim_symbolp);
+    g_globals["number?"] = make_prim(prim_numberp);
+    g_globals["boolean?"] = make_prim(prim_booleanp);
+    g_globals["procedure?"] = make_prim(prim_procedurep);
+    g_globals["list?"] = make_prim(prim_listp);
+    g_globals["atom?"] = make_prim(prim_atomp);
+    g_globals["length"] = make_prim(prim_length);
     g_globals["memv"] = make_prim(prim_memv);
     g_globals["memq"] = make_prim(prim_memq);
     g_globals["assq"] = make_prim(prim_assq);
@@ -1774,22 +1874,6 @@ int main(int argc, char** argv) {
             }
             return 0;
         }
-
-#ifdef HAS_BIGNUM
-        std::cout << "scheme12 (SECD with Boost arbitrary precision integers)\n";
-#else
-        std::cout << "scheme12 (SECD with long long - WARNING: limited precision)\n";
-#endif
-        std::cout << "Multi-line input supported. Type Ctrl-D to exit.\n";
-        std::cout << "Example:\n";
-        std::cout << "  (define (factorial n)\n";
-        std::cout << "    (if (<= n 1)\n";
-        std::cout << "        1\n";
-        std::cout << "        (* n (factorial (- n 1)))))\n";
-#ifdef HAS_BIGNUM
-        std::cout << "  (factorial 100)  ; Bignum support!\n";
-#endif
-        std::cout << "\n";
 
         while (true) {
             std::string input = read_multiline_input();

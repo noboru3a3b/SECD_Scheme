@@ -18,7 +18,6 @@ all: $(TARGET)
 $(TARGET): $(SOURCE)
 	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $(TARGET) $(SOURCE) $(GC_LIB)
 	@for dll in $(GC_RUNTIME_DLLS); do cp -f $(GC_DLL_DIR)/$$dll .; done
-	@echo "Build successful! Testing bignum support..."
 
 clean:
 	rm -f $(TARGET) $(TARGET).exe libgc-1.dll libgccpp-1.dll
