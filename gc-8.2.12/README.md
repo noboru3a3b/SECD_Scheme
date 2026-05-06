@@ -1,3 +1,4 @@
+```bash
 # 1. Run w64devkit.exe (double-click)
 # Or
 C:\w64devkit\w64devkit.exe
@@ -13,3 +14,4 @@ cd /c/Users/okadan-cts/SECD_Scheme/gc-8.2.12/gc-8.2.4
 # 4. Build:
 make
 make install
+```
