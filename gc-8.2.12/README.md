@@ -1,6 +1,7 @@
-## Setting up Boehm GC using the 64devkit shell
+Download and extract gc-8.2.12.tar.gz to this location.
 
-### Start the w64devkit bash
+## Setting up Boehm GC using the 64devkit shell
+### Launching the w64devkit bash
 ```bash
 # 1. Run w64devkit.exe (double-click)
 # Or
