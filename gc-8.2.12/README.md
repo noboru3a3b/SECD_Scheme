@@ -3,7 +3,7 @@
 ### Launching the w64devkit bash
 ```bash
 1. Run w64devkit.exe (double-click)
-# Or
+Or
 C:\w64devkit\w64devkit.exe
 
 2. Once the bash shell starts, run the following:
