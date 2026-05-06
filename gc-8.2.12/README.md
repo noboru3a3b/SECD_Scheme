@@ -11,6 +11,6 @@ cd /c/Users/okadan-cts/SECD_Scheme/gc-8.2.12/gc-8.2.4
 --enable-threads=win32 \
 --enable-cplusplus
 # 4. Build
-make -j4
+make 
 make install
 ```
