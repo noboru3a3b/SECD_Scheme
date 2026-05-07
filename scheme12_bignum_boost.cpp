@@ -44,6 +44,7 @@ using BigIntType = boost::multiprecision::cpp_int;
 using BigIntType = long long;
 #endif
 
+// 前方宣言
 struct Value;
 struct Pair;
 struct Closure;
@@ -51,6 +52,7 @@ struct Continuation;
 struct DumpFrame;
 struct Instruction;
 struct Code;
+struct FilePort;  // 追加
 
 // Bignum wrapper class
 struct BigInt : public gc {
@@ -95,12 +97,37 @@ struct BigInt : public gc {
     bool is_zero() const { return value == 0; }
 };
 
+// FilePort structure for file I/O (BigIntの後、Valueの前に定義)
+struct FilePort : public gc {
+    std::FILE* fp;
+    bool is_input;
+    bool is_closed;
+    
+    FilePort(std::FILE* f, bool input) : fp(f), is_input(input), is_closed(false) {}
+    
+    ~FilePort() {
+        if (fp && !is_closed) {
+            std::fclose(fp);
+        }
+    }
+    
+    void close() {
+        if (fp && !is_closed) {
+            std::fclose(fp);
+            is_closed = true;
+            fp = nullptr;
+        }
+    }
+};
+
+// 型エイリアス定義
 using ValuePtr = Value*;
 using PairPtr = Pair*;
 using ClosurePtr = Closure*;
 using ContPtr = Continuation*;
 using CodePtr = Code*;
 using BigIntPtr = BigInt*;
+using FilePortPtr = FilePort*;  // 追加
 using ValueVec = std::vector<ValuePtr, gc_allocator<ValuePtr>>;
 using DumpFrameVec = std::vector<DumpFrame, gc_allocator<DumpFrame>>;
 using StringValueMap = std::unordered_map<std::string, ValuePtr,
@@ -148,7 +175,8 @@ struct Continuation : public gc {
 using PrimitiveFn = std::function<ValuePtr(const ValueVec&)>;
 
 struct Value : public gc {
-    using Data = std::variant<NilTag, bool, BigIntPtr, std::string, Symbol, PairPtr, ClosurePtr, ContPtr, PrimitiveFn>;
+    using Data = std::variant<NilTag, bool, BigIntPtr, std::string, Symbol, PairPtr, 
+                             ClosurePtr, ContPtr, PrimitiveFn, FilePortPtr>;
     Data data;
     explicit Value(Data d) : data(std::move(d)) {}
 };
@@ -174,6 +202,8 @@ struct Instruction {
 struct Code : public gc {
     std::vector<Instruction, gc_allocator<Instruction>> ins;
 };
+
+using FilePortPtr = FilePort*;
 
 static ValuePtr g_nil = nullptr;
 static StringValueMap g_globals;
@@ -354,6 +384,11 @@ static std::string to_string(const ValuePtr& v) {
     if (std::holds_alternative<ClosurePtr>(v->data)) return "#<closure>";
     if (std::holds_alternative<ContPtr>(v->data)) return "#<continuation>";
     if (std::holds_alternative<PrimitiveFn>(v->data)) return "#<primitive>";
+    if (std::holds_alternative<FilePortPtr>(v->data)) {
+        FilePortPtr port = std::get<FilePortPtr>(v->data);
+        if (port->is_closed) return "#<closed-port>";
+        return port->is_input ? "#<input-port>" : "#<output-port>";
+    }
     return "#<unknown>";
 }
 
@@ -1710,6 +1745,277 @@ static ValuePtr prim_load(const ValueVec& args) {
     return load_from_path(path);
 }
 
+// File I/O primitives
+
+static ValuePtr make_eof_object() {
+    static ValuePtr eof_sym = nullptr;
+    if (!eof_sym) {
+        eof_sym = make_symbol(":eof");
+    }
+    return eof_sym;
+}
+
+static ValuePtr prim_open_input_file(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<std::string>(args[0]->data)) {
+        vm_error("open-input-file expects a string path");
+    }
+    std::string path = std::get<std::string>(args[0]->data);
+    std::FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) {
+        vm_error("open-input-file: cannot open file: " + path);
+    }
+    FilePortPtr port = new FilePort(fp, true);
+    return make_value(port);
+}
+
+static ValuePtr prim_open_output_file(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<std::string>(args[0]->data)) {
+        vm_error("open-output-file expects a string path");
+    }
+    std::string path = std::get<std::string>(args[0]->data);
+    std::FILE* fp = std::fopen(path.c_str(), "wb");
+    if (!fp) {
+        vm_error("open-output-file: cannot open file: " + path);
+    }
+    FilePortPtr port = new FilePort(fp, false);
+    return make_value(port);
+}
+
+static ValuePtr prim_close_input_port(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<FilePortPtr>(args[0]->data)) {
+        vm_error("close-input-port expects a port");
+    }
+    FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
+    port->close();
+    return g_nil;
+}
+
+static ValuePtr prim_close_output_port(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<FilePortPtr>(args[0]->data)) {
+        vm_error("close-output-port expects a port");
+    }
+    FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
+    port->close();
+    return g_nil;
+}
+
+static ValuePtr prim_read_line(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<FilePortPtr>(args[0]->data)) {
+        vm_error("read-line expects a port");
+    }
+    FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
+    if (!port->is_input || port->is_closed || !port->fp) {
+        vm_error("read-line: port is not an open input port");
+    }
+    
+    std::string line;
+    int c;
+    while ((c = std::fgetc(port->fp)) != EOF) {
+        if (c == '\n') break;
+        if (c == '\r') {
+            // Check for CRLF
+            int next = std::fgetc(port->fp);
+            if (next != '\n' && next != EOF) {
+                std::ungetc(next, port->fp);
+            }
+            break;
+        }
+        line.push_back(static_cast<char>(c));
+    }
+    
+    if (c == EOF && line.empty()) {
+        return make_eof_object();
+    }
+    return make_string(line);
+}
+
+static ValuePtr prim_write_to_port(const ValueVec& args) {
+    if (args.size() != 2) {
+        vm_error("write expects 2 args (string, port)");
+    }
+    if (!std::holds_alternative<std::string>(args[0]->data)) {
+        vm_error("write: first arg must be a string");
+    }
+    if (!std::holds_alternative<FilePortPtr>(args[1]->data)) {
+        vm_error("write: second arg must be a port");
+    }
+    
+    std::string text = std::get<std::string>(args[0]->data);
+    FilePortPtr port = std::get<FilePortPtr>(args[1]->data);
+    
+    if (port->is_input || port->is_closed || !port->fp) {
+        vm_error("write: port is not an open output port");
+    }
+    
+    std::fwrite(text.c_str(), 1, text.size(), port->fp);
+    return g_nil;
+}
+
+static ValuePtr prim_write_newline(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<FilePortPtr>(args[0]->data)) {
+        vm_error("write_newline expects a port");
+    }
+    FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
+    
+    if (port->is_input || port->is_closed || !port->fp) {
+        vm_error("write_newline: port is not an open output port");
+    }
+    
+    std::fputc('\n', port->fp);
+    return g_nil;
+}
+
+static ValuePtr prim_eof_objectp(const ValueVec& args) {
+    if (args.size() != 1) {
+        vm_error("eof-object? expects 1 arg");
+    }
+    return make_bool(is_symbol(args[0], ":eof"));
+}
+
+static ValuePtr prim_read_char(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<FilePortPtr>(args[0]->data)) {
+        vm_error("read-char expects a port");
+    }
+    FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
+    
+    if (!port->is_input || port->is_closed || !port->fp) {
+        vm_error("read-char: port is not an open input port");
+    }
+    
+    int c = std::fgetc(port->fp);
+    if (c == EOF) {
+        return make_eof_object();
+    }
+    
+    std::string s(1, static_cast<char>(c));
+    return make_string(s);
+}
+
+static ValuePtr prim_write_char(const ValueVec& args) {
+    if (args.size() != 2) {
+        vm_error("write-char expects 2 args (char, port)");
+    }
+    if (!std::holds_alternative<std::string>(args[0]->data)) {
+        vm_error("write-char: first arg must be a string (char)");
+    }
+    if (!std::holds_alternative<FilePortPtr>(args[1]->data)) {
+        vm_error("write-char: second arg must be a port");
+    }
+    
+    std::string s = std::get<std::string>(args[0]->data);
+    if (s.empty()) {
+        vm_error("write-char: empty string");
+    }
+    
+    FilePortPtr port = std::get<FilePortPtr>(args[1]->data);
+    if (port->is_input || port->is_closed || !port->fp) {
+        vm_error("write-char: port is not an open output port");
+    }
+    
+    std::fputc(s[0], port->fp);
+    return g_nil;
+}
+
+static ValuePtr prim_read_expr(const ValueVec& args) {
+    if (args.size() != 1 || !std::holds_alternative<FilePortPtr>(args[0]->data)) {
+        vm_error("read-expr expects a port");
+    }
+    FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
+    
+    if (!port->is_input || port->is_closed || !port->fp) {
+        vm_error("read-expr: port is not an open input port");
+    }
+    
+    // Read one s-expression from port
+    std::string buffer;
+    int paren_depth = 0;
+    bool in_string = false;
+    bool in_comment = false;
+    bool seen_content = false;
+    
+    while (true) {
+        int c = std::fgetc(port->fp);
+        if (c == EOF) {
+            if (!seen_content) {
+                return make_eof_object();
+            }
+            break;
+        }
+        
+        char ch = static_cast<char>(c);
+        
+        if (ch == ';' && !in_string) {
+            in_comment = true;
+        }
+        if (ch == '\n') {
+            in_comment = false;
+        }
+        if (in_comment) {
+            buffer.push_back(ch);
+            continue;
+        }
+        
+        if (ch == '"' && (buffer.empty() || buffer.back() != '\\')) {
+            in_string = !in_string;
+        }
+        
+        if (!in_string) {
+            if (ch == '(' || ch == '[') {
+                paren_depth++;
+                seen_content = true;
+            } else if (ch == ')' || ch == ']') {
+                paren_depth--;
+            } else if (!std::isspace(static_cast<unsigned char>(ch))) {
+                seen_content = true;
+            }
+        }
+        
+        buffer.push_back(ch);
+        
+        if (seen_content && paren_depth == 0 && !in_string) {
+            // Check if we have a complete expression
+            std::string trimmed = buffer;
+            // Trim trailing whitespace
+            while (!trimmed.empty() && std::isspace(static_cast<unsigned char>(trimmed.back()))) {
+                trimmed.pop_back();
+            }
+            if (!trimmed.empty()) {
+                break;
+            }
+        }
+    }
+    
+    if (buffer.empty()) {
+        return make_eof_object();
+    }
+    
+    try {
+        Reader r(buffer);
+        ValuePtr expr = r.read_expr();
+        return expr ? expr : make_eof_object();
+    } catch (...) {
+        vm_error("read-expr: parse error");
+        return make_eof_object();
+    }
+}
+
+static ValuePtr prim_read_from_stdin(const ValueVec& args) {
+    (void)args;
+    std::string line;
+    if (!std::getline(std::cin, line)) {
+        return make_eof_object();
+    }
+    
+    try {
+        Reader r(line);
+        ValuePtr expr = r.read_expr();
+        return expr ? expr : make_eof_object();
+    } catch (...) {
+        vm_error("read: parse error");
+        return make_eof_object();
+    }
+}
+
 static void init_globals() {
     g_nil = make_value(NilTag{});
     g_globals.clear();
@@ -1723,10 +2029,20 @@ static void init_globals() {
     g_globals["NIL"] = g_globals["nil"];
     g_globals["T"] = g_globals["true"];
     g_globals[":undef"] = make_symbol(":undef");
+    
+    // 算術演算
     g_globals["+"] = make_prim(prim_add);
     g_globals["-"] = make_prim(prim_sub);
     g_globals["*"] = make_prim(prim_mul);
     g_globals["/"] = make_prim(prim_div);
+    g_globals["modulo"] = make_prim(prim_modulo);
+    g_globals["="] = make_prim(prim_num_eq);
+    g_globals["<"] = make_prim(prim_lt);
+    g_globals[">"] = make_prim(prim_gt);
+    g_globals["<="] = make_prim(prim_le);
+    g_globals[">="] = make_prim(prim_ge);
+    
+    // リスト操作
     g_globals["cons"] = make_prim(prim_cons);
     g_globals["set-car!"] = make_prim(prim_set_car);
     g_globals["set-cdr!"] = make_prim(prim_set_cdr);
@@ -1740,7 +2056,8 @@ static void init_globals() {
     g_globals["cdddr"] = make_prim(prim_cdddr);
     g_globals["list"] = make_prim(prim_list);
     g_globals["append"] = make_prim(prim_append);
-    g_globals["load"] = make_prim(prim_load);
+    
+    // 比較・述語
     g_globals["eq?"] = make_prim(prim_eq);
     g_globals["eqv?"] = make_prim(prim_eqv);
     g_globals["equal?"] = make_prim(prim_equal);
@@ -1755,16 +2072,29 @@ static void init_globals() {
     g_globals["memv"] = make_prim(prim_memv);
     g_globals["memq"] = make_prim(prim_memq);
     g_globals["assq"] = make_prim(prim_assq);
-    g_globals["modulo"] = make_prim(prim_modulo);
-    g_globals["="] = make_prim(prim_num_eq);
-    g_globals["<"] = make_prim(prim_lt);
-    g_globals[">"] = make_prim(prim_gt);
-    g_globals["<="] = make_prim(prim_le);
-    g_globals[">="] = make_prim(prim_ge);
     g_globals["null?"] = make_prim(prim_nullp);
     g_globals["pair?"] = make_prim(prim_pairp);
+    
+    // 標準入出力
     g_globals["display"] = make_prim(prim_display);
     g_globals["newline"] = make_prim(prim_newline);
+    g_globals["read"] = make_prim(prim_read_from_stdin);
+    
+    // ファイルI/O (新規追加)
+    g_globals["open-input-file"] = make_prim(prim_open_input_file);
+    g_globals["open-output-file"] = make_prim(prim_open_output_file);
+    g_globals["close-input-port"] = make_prim(prim_close_input_port);
+    g_globals["close-output-port"] = make_prim(prim_close_output_port);
+    g_globals["read-line"] = make_prim(prim_read_line);
+    g_globals["write"] = make_prim(prim_write_to_port);
+    g_globals["write_newline"] = make_prim(prim_write_newline);
+    g_globals["eof-object?"] = make_prim(prim_eof_objectp);
+    g_globals["read-char"] = make_prim(prim_read_char);
+    g_globals["write-char"] = make_prim(prim_write_char);
+    g_globals["read-expr"] = make_prim(prim_read_expr);
+    
+    // ファイルロード
+    g_globals["load"] = make_prim(prim_load);
 }
 
 static ValueVec read_all_exprs(const std::string& src) {
