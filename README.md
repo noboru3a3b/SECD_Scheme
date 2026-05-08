@@ -104,5 +104,19 @@ FALSE
 (((((NIL . a) . b) . c) . d) . e)  
 (a b c d e)  
 NIL  
+scheme12> (string? "Hello")  
+TRUE  
+scheme12> (string-length "Hello")  
+5  
+scheme12> (string-ref "Hello" 1)  
+"e"  
+scheme12> (vector? #(1 2 3))  
+TRUE  
+scheme12> (make-vector 5 0)  
+#(0 0 0 0 0)  
+scheme12> (vector-length #(1 2 3))  
+3  
+scheme12> (vector-ref #(a b c) 1)  
+b  
 scheme12>  
 ```
