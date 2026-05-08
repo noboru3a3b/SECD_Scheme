@@ -436,7 +436,6 @@ static std::string instruction_to_string(const Instruction& ins, int indent = 0)
             break;
         case Op::SEL:
         case Op::SELR:
-            // 分岐先は表示しない（再帰になるため）
             oss << " [THEN-BRANCH] [ELSE-BRANCH]";
             break;
         default:
@@ -452,6 +451,85 @@ static std::string code_to_string(CodePtr code, int indent = 0) {
     for (size_t i = 0; i < code->ins.size(); ++i) {
         oss << std::string(indent * 2, ' ') << "[" << std::setw(3) << i << "] ";
         oss << instruction_to_string(code->ins[i], 0) << "\n";
+    }
+    return oss.str();
+}
+
+// 詳細表示用（分岐先も含む）- disassemble専用
+static std::string instruction_to_string_detailed(const Instruction& ins, int indent = 0, int max_depth = 10);
+static std::string code_to_string_detailed(CodePtr code, int indent = 0, int max_depth = 10);
+
+static std::string instruction_to_string_detailed(const Instruction& ins, int indent, int max_depth) {
+    std::string prefix(indent * 2, ' ');
+    std::ostringstream oss;
+    oss << op_to_string(ins.op);
+    
+    switch (ins.op) {
+        case Op::LD:
+            oss << " (" << ins.a << " . " << ins.b << ")";
+            break;
+        case Op::LDC:
+            oss << " " << to_string(ins.constant);
+            break;
+        case Op::LDG:
+        case Op::DEF:
+        case Op::DEFM:
+        case Op::GSET:
+            oss << " " << ins.sym;
+            break;
+        case Op::LDF:
+            oss << " (";
+            for (size_t i = 0; i < ins.lambda_params.size(); ++i) {
+                if (i > 0) oss << " ";
+                oss << ins.lambda_params[i];
+            }
+            if (ins.lambda_rest) {
+                if (!ins.lambda_params.empty()) oss << " . ";
+                oss << *ins.lambda_rest;
+            }
+            oss << ")";
+            if (ins.lambda_code && max_depth > 0) {
+                oss << "\n" << prefix << "  Lambda body:";
+                oss << code_to_string_detailed(ins.lambda_code, indent + 2, max_depth - 1);
+            }
+            break;
+        case Op::LSET:
+            oss << " (" << ins.a << " . " << ins.b << ")";
+            break;
+        case Op::ARGS:
+        case Op::ARGS_AP:
+            oss << " " << ins.a;
+            break;
+        case Op::SEL:
+        case Op::SELR:
+            if (max_depth > 0) {
+                if (ins.ct) {
+                    oss << "\n" << prefix << "  THEN:";
+                    oss << code_to_string_detailed(ins.ct, indent + 2, max_depth - 1);
+                }
+                if (ins.cf) {
+                    oss << "\n" << prefix << "  ELSE:";
+                    oss << code_to_string_detailed(ins.cf, indent + 2, max_depth - 1);
+                }
+            } else {
+                oss << " [THEN-BRANCH] [ELSE-BRANCH] (max depth reached)";
+            }
+            break;
+        default:
+            break;
+    }
+    return oss.str();
+}
+
+static std::string code_to_string_detailed(CodePtr code, int indent, int max_depth) {
+    if (!code || code->ins.empty()) return "\n" + std::string(indent * 2, ' ') + "(empty)";
+    if (max_depth < 0) return "\n" + std::string(indent * 2, ' ') + "(max depth reached)";
+    
+    std::ostringstream oss;
+    oss << "\n";
+    for (size_t i = 0; i < code->ins.size(); ++i) {
+        oss << std::string(indent * 2, ' ') << "[" << std::setw(3) << i << "] ";
+        oss << instruction_to_string_detailed(code->ins[i], indent, max_depth) << "\n";
     }
     return oss.str();
 }
@@ -514,8 +592,7 @@ static std::string to_string(const ValuePtr& v) {
     if (std::holds_alternative<ClosurePtr>(v->data)) {
         ClosurePtr clo = std::get<ClosurePtr>(v->data);
         std::ostringstream oss;
-        oss << "(CLOSURE";
-        oss << "\n  PARAMS: (";
+        oss << "#<closure:(";
         for (size_t i = 0; i < clo->params.size(); ++i) {
             if (i > 0) oss << " ";
             oss << clo->params[i];
@@ -524,15 +601,7 @@ static std::string to_string(const ValuePtr& v) {
             if (!clo->params.empty()) oss << " . ";
             oss << *clo->rest_param;
         }
-        oss << ")";
-        oss << "\n  BODY:" << code_to_string(clo->body, 2);
-        oss << "  ENV: ";
-        if (clo->captured_env.empty()) {
-            oss << "NIL";
-        } else {
-            oss << "<" << clo->captured_env.size() << " frames>";
-        }
-        oss << ")";
+        oss << ")>";
         return oss.str();
     }
     
@@ -2633,7 +2702,7 @@ static ValuePtr prim_disassemble(const ValueVec& args) {
             std::cout << *clo->rest_param;
         }
         std::cout << ")\n";
-        std::cout << "Body:" << code_to_string(clo->body, 1);
+        std::cout << "Body:" << code_to_string_detailed(clo->body, 1, 10);
         std::cout << "Environment: " << clo->captured_env.size() << " frame(s)\n";
         std::cout << "===================\n";
         return make_symbol(":disassembled");

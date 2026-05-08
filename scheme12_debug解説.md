@@ -217,18 +217,63 @@ SECD 仮想マシン方式 Scheme コンパイラ兼実行系「scheme12_debug�
 - REPL
   - 複数行入力に対応（括弧対応チェック）
   - 入力はすべて S 式として read_all_exprs で読み込み評価
-  - 出力は to_string による 1 行表示（NIL/TRUE/FALSE の大文字表記など）
+  - 出力は to_string による 1 行表示
+    - クロージャは `#<closure:(params)>` のように簡潔に表示
+    - プリミティブは `#<primitive:name>` 形式
+    - 特殊形式は `#<special-form:name>` 形式
+    - TRUE/FALSE/NIL の大文字表記も利用可能
+
 - デバッグ機能（REPL コマンド）
-  - (trace-on)/(trace-off)
-    - 命令ごとのステップ実行の詳細を標準出力に表示
-  - (compile expr)
-    - 式 expr をコンパイルし、生成バイトコード（Code）をダンプ
-  - (disassemble closure-or-macro)
-    - クロージャ（あるいはマクロの変換器クロージャ）のパラメータと本体命令列、捕捉環境フレーム数を表示
-  - (globals), (macros)
-    - 現在の大域変数・マクロ一覧を表示（種別を短縮表現で）
-  - (help)
-    - デバッグコマンドのヘルプ
+  
+  1. (help)
+     - デバッグコマンドの一覧とヘルプを表示
+  
+  2. (compile expr)
+     - 式 expr をコンパイルし、生成バイトコード（Code）をダンプ
+     - 用途: コンパイラの出力を確認、最適化の検証
+     - 注意: 分岐先のコードは `[THEN-BRANCH]` `[ELSE-BRANCH]` と省略表示される
+  
+  3. (disassemble closure-or-macro)
+     - クロージャ（またはマクロの変換器クロージャ）の内部を詳細に表示
+     - 表示内容:
+       - パラメータ（固定引数と可変引数）
+       - 本体の命令列（完全な逆アセンブル）
+       - 捕捉環境のフレーム数
+     - 特徴: 
+       - **分岐先（THEN/ELSE）のコードも完全に表示**
+       - **ラムダ式のボディも展開表示**
+       - 階層構造をインデントで可視化（最大10階層まで）
+     - 用途: 関数の内部構造の理解、バグ追跡
+  
+  4. (trace-on) / (trace-off)
+     - VM の命令ごとのステップ実行の詳細を標準出力に表示/非表示
+     - 表示内容:
+       - ステップ番号と PC（プログラムカウンタ）
+       - 実行中の命令
+       - スタック（S）の内容（最大5要素まで表示）
+       - 環境（E）のフレーム数と内容（最大3フレームまで表示）
+       - ダンプ（D）のフレーム数
+     - 用途: 実行フローの追跡、継続の動作確認
+  
+  5. (globals)
+     - 現在のグローバル変数一覧を表示
+     - プリミティブ・特殊形式・クロージャは短縮表記で表示
+  
+  6. (macros)
+     - 登録済みマクロの名前一覧を表示
+
+- デバッグワークフロー例
+  
+  基本的な関数の検証:
+  1. 関数を定義
+  2. シンボル表示で簡潔な情報確認（`#<closure:(params)>`）
+  3. (disassemble func) で詳細な内部構造を確認
+  4. 必要に応じて (trace-on) で実際の実行を追跡
+  5. (trace-off) でトレースを終了
+  
+  コンパイラ出力の検証:
+  1. (compile expr) でコンパイル結果の概要を確認
+  2. 関数に定義してから (disassemble) で詳細確認
 
 ────────────────────────────────────
 
@@ -274,35 +319,325 @@ SECD 仮想マシン方式 Scheme コンパイラ兼実行系「scheme12_debug�
 ────────────────────────────────────
 
 付録A. 例: コンパイル出力と逆アセンブル
-- コンパイル可視化
-  ```
-  scheme12> (compile '(+ 1 2))
-  
-  === Compiled Code ===
-  [  0] LDC 1
-  [  1] LDC 2
-  [  2] ARGS 2
-  [  3] LDG +
-  [  4] APP
-  [  5] STOP
-  =====================
-  :compiled
-  ```
-- 関数の逆アセンブル
-  ```
-  scheme12> (define (fact n a)
-               (if (= n 0) a (fact (- n 1) (* a n))))
-  scheme12> (disassemble fact)
 
-  === Disassembly ===
-  Parameters: (n a)
-  Body:
-   [  0] LD ...
-   ... 中略 ...
-  Environment: 0 frame(s)
-  ===================
-  :disassembled
-  ```
+■ 例1: 簡単な式のコンパイル
+
+```scheme
+scheme12> (compile '(+ 1 2))
+
+=== Compiled Code ===
+[  0] LDC 1
+[  1] LDC 2
+[  2] ARGS 2
+[  3] LDG +
+[  4] APP
+[  5] STOP
+=====================
+:compiled
+```
+
+解説:
+- LDC で定数 1, 2 をスタックに積む
+- ARGS 2 で2つの引数をリストにまとめる
+- LDG + でグローバル関数 + を取得
+- APP で適用
+- STOP で終了
+
+────────────────────────────────────
+
+■ 例2: 条件分岐を含む関数（disassemble の威力）
+
+```scheme
+scheme12> (define (fact n a)
+            (if (= n 0)
+                a
+                (fact (- n 1) (* a n))))
+fact
+
+scheme12> fact
+#<closure:(n a)>
+
+scheme12> (disassemble fact)
+
+=== Disassembly ===
+Parameters: (n a)
+Body:
+  [  0] LD (0 . 0)
+  [  1] LDC 0
+  [  2] ARGS 2
+  [  3] LDG =
+  [  4] APP
+  [  5] SEL
+    THEN:
+      [  0] LD (0 . 1)
+      [  1] JOIN
+    ELSE:
+      [  0] LD (0 . 0)
+      [  1] LD (0 . 0)
+      [  2] LDC 1
+      [  3] ARGS 2
+      [  4] LDG -
+      [  5] APP
+      [  6] LD (0 . 1)
+      [  7] LD (0 . 0)
+      [  8] ARGS 2
+      [  9] LDG *
+      [ 10] APP
+      [ 11] ARGS 2
+      [ 12] LDG fact
+      [ 13] TAPP
+      [ 14] JOIN
+  [  6] RTN
+Environment: 0 frame(s)
+===================
+:disassembled
+```
+
+解説:
+- SEL 命令の分岐先（THEN/ELSE）が完全に表示される
+- THEN ブランチ: 単に a を返す（LD (0.1) = 第0フレームの第1スロット）
+- ELSE ブランチ: 
+  - (- n 1) と (* a n) を計算
+  - TAPP で末尾再帰呼び出し（TCO が効く）
+- インデントで階層構造が一目瞭然
+
+────────────────────────────────────
+
+■ 例3: ネストした条件分岐
+
+```scheme
+scheme12> (define (sign x)
+            (cond ((< x 0) 'negative)
+                  ((= x 0) 'zero)
+                  (else 'positive)))
+sign
+
+scheme12> (disassemble sign)
+
+=== Disassembly ===
+Parameters: (x)
+Body:
+  [  0] LD (0 . 0)
+  [  1] LDC 0
+  [  2] ARGS 2
+  [  3] LDG <
+  [  4] APP
+  [  5] SEL
+    THEN:
+      [  0] LDC NEGATIVE
+      [  1] JOIN
+    ELSE:
+      [  0] LD (0 . 0)
+      [  1] LDC 0
+      [  2] ARGS 2
+      [  3] LDG =
+      [  4] APP
+      [  5] SEL
+        THEN:
+          [  0] LDC ZERO
+          [  1] JOIN
+        ELSE:
+          [  0] LDC POSITIVE
+          [  1] JOIN
+      [  6] JOIN
+  [  6] RTN
+Environment: 0 frame(s)
+===================
+:disassembled
+```
+
+解説:
+- cond が複数の if にネストして展開される様子が見える
+- ELSE ブランチの中にさらに SEL があり、2段階の条件分岐
+- インデントの深さで入れ子構造が明確
+
+────────────────────────────────────
+
+■ 例4: ラムダ式を含む関数
+
+```scheme
+scheme12> (define (make-adder n)
+            (lambda (x) (+ x n)))
+make-adder
+
+scheme12> (disassemble make-adder)
+
+=== Disassembly ===
+Parameters: (n)
+Body:
+  [  0] LDF (x)
+    Lambda body:
+      [  0] LD (0 . 0)
+      [  1] LD (1 . 0)
+      [  2] ARGS 2
+      [  3] LDG +
+      [  4] APP
+      [  5] RTN
+  [  1] RTN
+Environment: 0 frame(s)
+===================
+:disassembled
+```
+
+解説:
+- LDF 命令の中にラムダのボディが展開表示される
+- 内側のラムダは外側の n を参照（LD (1.0) = 1つ外のフレーム）
+- クロージャの静的スコープの仕組みが可視化される
+
+────────────────────────────────────
+
+■ 例5: トレース実行で継続の動きを観察
+
+```scheme
+scheme12> (trace-on)
+Trace mode ON
+TRUE
+
+scheme12> (+ 1 2)
+
+==== Step 0 ====
+PC: 0
+Instruction: LDC 1
+Stack: (empty)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 1 ====
+PC: 1
+Instruction: LDC 2
+Stack: 
+  [0] 1
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 2 ====
+PC: 2
+Instruction: ARGS 2
+Stack: 
+  [0] 2
+  [1] 1
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 3 ====
+PC: 3
+Instruction: LDG +
+Stack: 
+  [0] (1 2)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 4 ====
+PC: 4
+Instruction: APP
+Stack: 
+  [0] #<primitive:+>
+  [1] (1 2)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 5 ====
+PC: 5
+Instruction: STOP
+Stack: 
+  [0] 3
+Environment: (empty)
+Dump: 0 frame(s)
+3
+
+scheme12> (trace-off)
+Trace mode OFF
+FALSE
+```
+
+解説:
+- 各ステップでスタック・環境・ダンプの状態を確認
+- LDC → ARGS → APP の流れを追跡
+- プリミティブ関数の呼び出しも観察可能
+
+────────────────────────────────────
+
+■ 例6: compile と disassemble の使い分け
+
+**compile の用途**: 
+- 式の即座のコンパイル結果確認
+- 分岐の概要把握（詳細は省略される）
+
+```scheme
+scheme12> (compile '(if (< x 0) 'neg 'pos))
+
+=== Compiled Code ===
+[  0] LDG x
+[  1] LDC 0
+[  2] ARGS 2
+[  3] LDG <
+[  4] APP
+[  5] SEL [THEN-BRANCH] [ELSE-BRANCH]
+[  6] STOP
+=====================
+:compiled
+```
+
+**disassemble の用途**:
+- 定義済み関数の詳細分析
+- 分岐先の完全な命令列確認
+- ラムダ式の内部構造確認
+
+```scheme
+scheme12> (define (test x) (if (< x 0) 'neg 'pos))
+scheme12> (disassemble test)
+
+=== Disassembly ===
+Parameters: (x)
+Body:
+  [  0] LD (0 . 0)
+  [  1] LDC 0
+  [  2] ARGS 2
+  [  3] LDG <
+  [  4] APP
+  [  5] SEL
+    THEN:
+      [  0] LDC NEG
+      [  1] JOIN
+    ELSE:
+      [  0] LDC POS
+      [  1] JOIN
+  [  6] RTN
+Environment: 0 frame(s)
+===================
+:disassembled
+```
+
+**使い分けのポイント**:
+- compile: 概要把握、コンパイラの動作確認
+- disassemble: 詳細分析、デバッグ、学習
+
+────────────────────────────────────
+
+■ 例7: call/cc のトレース（高度な例）
+
+```scheme
+scheme12> (define escape false)
+scheme12> (trace-on)
+scheme12> (+ 1 (call/cc (lambda (k) (set! escape k) 2)) 3)
+
+... 多数のステップ表示（省略）...
+... CALLCC 命令で継続が作成される様子
+... 継続が変数に代入される様子
+... 最終的に (+ 1 2 3) = 6 が返る
+
+6
+scheme12> (trace-off)
+scheme12> (escape 10)
+13
+```
+
+解説:
+- トレースモードで call/cc の内部動作を観察
+- 継続が捕捉され、後で呼び出される様子を追跡
+- CALLCC 命令がどのように S,E,C,D をスナップショットするか確認可能
+
+────────────────────────────────────
 
 付録B. 例: 継続（call/cc）の動き
 - 代表例
@@ -317,6 +652,8 @@ SECD 仮想マシン方式 Scheme コンパイラ兼実行系「scheme12_debug�
   - (call/cc (lambda (k) ...)) で現在の継続を k に束縛
   - k は任意の時点で呼べる関数で、引数を「直ちにその時点へ戻り値として返す」
   - 本実装では ContPtr が S,E,C,pc,D を保持し、適用時に VM 状態を復元して値を積む
+
+────────────────────────────────────
 
 付録C. ビルド・起動方法（要約）
 - 依存
@@ -336,6 +673,7 @@ SECD 仮想マシン方式 Scheme コンパイラ兼実行系「scheme12_debug�
   - (load "path/to/file.scm") で追加入力
 
 ────────────────────────────────────
+
 
 以上
 
