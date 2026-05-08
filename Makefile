@@ -8,8 +8,8 @@ GC_LIB = -Lgc-8.2.12/.libs -lgc -lgccpp
 GC_DLL_DIR = gc-8.2.12/.libs
 GC_RUNTIME_DLLS = libgc-1.dll libgccpp-1.dll
 
-TARGET = scheme12_bignum
-SOURCE = scheme12_bignum_boost.cpp
+TARGET = scheme12_debug
+SOURCE = scheme12_bignum_boost_debug.cpp
 
 .PHONY: all clean test
 
