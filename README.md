@@ -28,6 +28,8 @@ The actual actions taken are as follows:
 - After that, We implemented string and vector manipulation. Once again, Claude 4.5 Sonnet played a crucial role.
 
 - After that, We implemented Debugger in System. Once again, Claude 4.5 Sonnet played a crucial role.
+
+- Then, we had GPT-5 Thinking create the system's instruction manual. It turned out he was incredibly clever.
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.
 
