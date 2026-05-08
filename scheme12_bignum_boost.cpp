@@ -134,6 +134,24 @@ using StringValueMap = std::unordered_map<std::string, ValuePtr,
     std::hash<std::string>, std::equal_to<std::string>,
     traceable_allocator<std::pair<const std::string, ValuePtr>>>;
 
+// Vector structure
+struct Vector : public gc {
+    ValueVec elements;
+    
+    Vector() = default;
+    explicit Vector(std::size_t size, ValuePtr init = nullptr) {
+        // g_nilはまだ初期化されていない可能性があるので、nullptrを使う
+        elements.resize(size, init);
+    }
+    explicit Vector(const ValueVec& elems) : elements(elems) {}
+    
+    std::size_t size() const { return elements.size(); }
+    ValuePtr& at(std::size_t idx) { return elements.at(idx); }
+    const ValuePtr& at(std::size_t idx) const { return elements.at(idx); }
+};
+
+using VectorPtr = Vector*;
+
 struct Symbol {
     std::string name;
 };
@@ -176,7 +194,7 @@ using PrimitiveFn = std::function<ValuePtr(const ValueVec&)>;
 
 struct Value : public gc {
     using Data = std::variant<NilTag, bool, BigIntPtr, std::string, Symbol, PairPtr, 
-                             ClosurePtr, ContPtr, PrimitiveFn, FilePortPtr>;
+                             ClosurePtr, ContPtr, PrimitiveFn, FilePortPtr, VectorPtr>;  // VectorPtrを追加
     Data data;
     explicit Value(Data d) : data(std::move(d)) {}
 };
@@ -202,8 +220,6 @@ struct Instruction {
 struct Code : public gc {
     std::vector<Instruction, gc_allocator<Instruction>> ins;
 };
-
-using FilePortPtr = FilePort*;
 
 static ValuePtr g_nil = nullptr;
 static StringValueMap g_globals;
@@ -274,6 +290,39 @@ static ValuePtr make_cont(const ValueVec& s, const ValueVec& e, CodePtr c, std::
 }
 
 static ValuePtr make_prim(PrimitiveFn fn) { return make_value(std::move(fn)); }
+
+static ValuePtr make_vector_value(VectorPtr vec) {
+    return make_value(vec);
+}
+
+static ValuePtr make_vector_value(std::size_t size, ValuePtr init = nullptr) {
+    // ここでg_nilを使用
+    VectorPtr vec = new Vector(size, init ? init : g_nil);
+    return make_vector_value(vec);
+}
+
+static ValuePtr make_vector_value(const ValueVec& elems) {
+    VectorPtr vec = new Vector(elems);
+    return make_vector_value(vec);
+}
+
+static bool is_vector(const ValuePtr& v) {
+    return v && std::holds_alternative<VectorPtr>(v->data);
+}
+
+static VectorPtr as_vector(const ValuePtr& v) {
+    if (!is_vector(v)) vm_error("expected vector");
+    return std::get<VectorPtr>(v->data);
+}
+
+static bool is_string(const ValuePtr& v) {
+    return v && std::holds_alternative<std::string>(v->data);
+}
+
+static std::string& as_string(const ValuePtr& v) {
+    if (!is_string(v)) vm_error("expected string");
+    return std::get<std::string>(v->data);
+}
 
 static bool is_nil(const ValuePtr& v) {
     return !v || std::holds_alternative<NilTag>(v->data);
@@ -389,6 +438,18 @@ static std::string to_string(const ValuePtr& v) {
         if (port->is_closed) return "#<closed-port>";
         return port->is_input ? "#<input-port>" : "#<output-port>";
     }
+    // ベクター表示の追加
+    if (std::holds_alternative<VectorPtr>(v->data)) {
+        VectorPtr vec = std::get<VectorPtr>(v->data);
+        std::ostringstream oss;
+        oss << "#(";
+        for (std::size_t i = 0; i < vec->size(); ++i) {
+            if (i > 0) oss << " ";
+            oss << to_string(vec->at(i));
+        }
+        oss << ")";
+        return oss.str();
+    }
     return "#<unknown>";
 }
 
@@ -431,6 +492,18 @@ struct Reader {
         skip_ws();
         if (p >= s.size()) return nullptr;
         char c = get();
+        
+        // ベクターリテラル対応を追加
+        if (c == '#') {
+            if (peek() == '(') {
+                get(); // consume '('
+                return read_vector();
+            }
+            // その他の#文字は既存の処理へ
+            --p;
+            return read_atom('#');
+        }
+        
         if (c == '(') return read_list();
         if (c == '\'') {
             ValuePtr x = read_expr();
@@ -451,6 +524,18 @@ struct Reader {
         }
         if (c == '"') return read_string();
         return read_atom(c);
+    }
+
+    ValuePtr read_vector() {
+        ValueVec items;
+        while (true) {
+            skip_ws();
+            if (peek() == ')') {
+                get();
+                return make_vector_value(items);
+            }
+            items.push_back(read_expr());
+        }
     }
 
     ValuePtr read_string() {
@@ -778,8 +863,11 @@ static bool extract_params(ValuePtr params_expr, std::vector<std::string, gc_all
 }
 
 static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) {
+    // ベクターを自己評価フォームに追加
     if (!expr || is_nil(expr) || std::holds_alternative<bool>(expr->data) || 
-        std::holds_alternative<BigIntPtr>(expr->data) || std::holds_alternative<std::string>(expr->data)) {
+        std::holds_alternative<BigIntPtr>(expr->data) || 
+        std::holds_alternative<std::string>(expr->data) ||
+        std::holds_alternative<VectorPtr>(expr->data)) {  // ← この行を追加
         Instruction ldc = make_ins(Op::LDC);
         ldc.constant = expr ? expr : g_nil;
         emit(code, ldc);
@@ -1288,6 +1376,17 @@ static ValuePtr macro_expand_1_expr(ValuePtr expr) {
     ValueVec raw_args = vector_from_list(cdr(expr));
     return apply_callable_raw(it->second, raw_args);
 }
+
+#ifdef HAS_BIGNUM
+static long long bigint_to_ll(const BigInt& n) {
+    std::string s = n.to_string();
+    return std::stoll(s);
+}
+#else
+static long long bigint_to_ll(const BigInt& n) {
+    return n.value;
+}
+#endif
 
 // Primitive functions
 static ValuePtr prim_add(const ValueVec& args) {
@@ -2016,11 +2115,246 @@ static ValuePtr prim_read_from_stdin(const ValueVec& args) {
     }
 }
 
+static ValuePtr prim_stringp(const ValueVec& args) {
+    if (args.size() != 1) vm_error("string? expects 1 arg");
+    return make_bool(is_string(args[0]));
+}
+
+static ValuePtr prim_make_string(const ValueVec& args) {
+    if (args.empty() || args.size() > 2) vm_error("make-string expects 1 or 2 args");
+    BigInt& len = as_int(args[0]);
+    if (len < BigInt(0)) vm_error("make-string: negative length");
+    
+    long long len_val = bigint_to_ll(len);
+    if (len_val < 0 || len_val > 1000000) vm_error("make-string: invalid length");
+    std::size_t n = static_cast<std::size_t>(len_val);
+    
+    char fill_char = ' ';
+    if (args.size() == 2) {
+        std::string& s = as_string(args[1]);
+        if (s.empty()) vm_error("make-string: empty fill char");
+        fill_char = s[0];
+    }
+    
+    return make_string(std::string(n, fill_char));
+}
+
+static ValuePtr prim_string_length(const ValueVec& args) {
+    if (args.size() != 1) vm_error("string-length expects 1 arg");
+    return make_int(BigInt(static_cast<long long>(as_string(args[0]).size())));
+}
+
+static ValuePtr prim_string_ref(const ValueVec& args) {
+    if (args.size() != 2) vm_error("string-ref expects 2 args");
+    std::string& s = as_string(args[0]);
+    BigInt& idx = as_int(args[1]);
+    
+    long long i = bigint_to_ll(idx);
+    if (i < 0 || static_cast<std::size_t>(i) >= s.size()) {
+        vm_error("string-ref: index out of range");
+    }
+    
+    return make_string(std::string(1, s[static_cast<std::size_t>(i)]));
+}
+
+static ValuePtr prim_string_set(const ValueVec& args) {
+    if (args.size() != 3) vm_error("string-set! expects 3 args");
+    std::string& s = as_string(args[0]);
+    BigInt& idx = as_int(args[1]);
+    std::string& newchar = as_string(args[2]);
+    
+    if (newchar.empty()) vm_error("string-set!: empty char string");
+    
+    long long i = bigint_to_ll(idx);
+    if (i < 0 || static_cast<std::size_t>(i) >= s.size()) {
+        vm_error("string-set!: index out of range");
+    }
+    
+    s[static_cast<std::size_t>(i)] = newchar[0];
+    return make_symbol(":undef");
+}
+
+static ValuePtr prim_substring(const ValueVec& args) {
+    if (args.size() < 2 || args.size() > 3) vm_error("substring expects 2 or 3 args");
+    std::string& s = as_string(args[0]);
+    BigInt& start = as_int(args[1]);
+    
+    long long start_val = bigint_to_ll(start);
+    if (start_val < 0 || start_val > static_cast<long long>(s.size())) {
+        vm_error("substring: start index out of range");
+    }
+    std::size_t start_idx = static_cast<std::size_t>(start_val);
+    std::size_t end_idx = s.size();
+    
+    if (args.size() == 3) {
+        BigInt& end = as_int(args[2]);
+        long long end_val = bigint_to_ll(end);
+        if (end_val < start_val || end_val > static_cast<long long>(s.size())) {
+            vm_error("substring: end index out of range");
+        }
+        end_idx = static_cast<std::size_t>(end_val);
+    }
+    
+    return make_string(s.substr(start_idx, end_idx - start_idx));
+}
+
+static ValuePtr prim_string_append(const ValueVec& args) {
+    std::string result;
+    for (auto& arg : args) {
+        result += as_string(arg);
+    }
+    return make_string(result);
+}
+
+static ValuePtr prim_string_to_list(const ValueVec& args) {
+    if (args.size() != 1) vm_error("string->list expects 1 arg");
+    std::string& s = as_string(args[0]);
+    ValueVec chars;
+    for (char c : s) {
+        chars.push_back(make_string(std::string(1, c)));
+    }
+    return list_from_vector(chars);
+}
+
+static ValuePtr prim_list_to_string(const ValueVec& args) {
+    if (args.size() != 1) vm_error("list->string expects 1 arg");
+    ValuePtr ls = args[0];
+    std::string result;
+    while (!is_nil(ls)) {
+        if (!is_pair(ls)) vm_error("list->string: not a proper list");
+        std::string& ch = as_string(car(ls));
+        if (!ch.empty()) result += ch[0];
+        ls = cdr(ls);
+    }
+    return make_string(result);
+}
+
+static ValuePtr prim_string_eq(const ValueVec& args) {
+    if (args.size() != 2) vm_error("string=? expects 2 args");
+    return make_bool(as_string(args[0]) == as_string(args[1]));
+}
+
+static ValuePtr prim_string_lt(const ValueVec& args) {
+    if (args.size() != 2) vm_error("string<? expects 2 args");
+    return make_bool(as_string(args[0]) < as_string(args[1]));
+}
+
+static ValuePtr prim_string_gt(const ValueVec& args) {
+    if (args.size() != 2) vm_error("string>? expects 2 args");
+    return make_bool(as_string(args[0]) > as_string(args[1]));
+}
+
+static ValuePtr prim_string_le(const ValueVec& args) {
+    if (args.size() != 2) vm_error("string<=? expects 2 args");
+    return make_bool(as_string(args[0]) <= as_string(args[1]));
+}
+
+static ValuePtr prim_string_ge(const ValueVec& args) {
+    if (args.size() != 2) vm_error("string>=? expects 2 args");
+    return make_bool(as_string(args[0]) >= as_string(args[1]));
+}
+
+static ValuePtr prim_number_to_string(const ValueVec& args) {
+    if (args.size() != 1) vm_error("number->string expects 1 arg");
+    return make_string(as_int(args[0]).to_string());
+}
+
+static ValuePtr prim_string_to_number(const ValueVec& args) {
+    if (args.size() != 1) vm_error("string->number expects 1 arg");
+    try {
+        return make_int(as_string(args[0]));
+    } catch (...) {
+        return make_bool(false);
+    }
+}
+
+static ValuePtr prim_char_to_integer(const ValueVec& args) {
+    if (args.size() != 1) vm_error("char->integer expects 1 arg");
+    std::string& s = as_string(args[0]);
+    if (s.empty()) vm_error("char->integer: empty string");
+    return make_int(BigInt(static_cast<long long>(static_cast<unsigned char>(s[0]))));
+}
+
+static ValuePtr prim_integer_to_char(const ValueVec& args) {
+    if (args.size() != 1) vm_error("integer->char expects 1 arg");
+    BigInt& n = as_int(args[0]);
+    long long val = bigint_to_ll(n);
+    if (val < 0 || val > 127) vm_error("integer->char: value out of ASCII range");
+    return make_string(std::string(1, static_cast<char>(val)));
+}
+
+static ValuePtr prim_vectorp(const ValueVec& args) {
+    if (args.size() != 1) vm_error("vector? expects 1 arg");
+    return make_bool(is_vector(args[0]));
+}
+
+static ValuePtr prim_make_vector(const ValueVec& args) {
+    if (args.empty() || args.size() > 2) vm_error("make-vector expects 1 or 2 args");
+    BigInt& len = as_int(args[0]);
+    if (len < BigInt(0)) vm_error("make-vector: negative length");
+    
+    long long len_val = bigint_to_ll(len);
+    if (len_val < 0 || len_val > 1000000) vm_error("make-vector: length too large");
+    std::size_t n = static_cast<std::size_t>(len_val);
+    
+    ValuePtr init = (args.size() == 2) ? args[1] : g_nil;
+    return make_vector_value(n, init);
+}
+
+static ValuePtr prim_vector(const ValueVec& args) {
+    return make_vector_value(args);
+}
+
+static ValuePtr prim_vector_length(const ValueVec& args) {
+    if (args.size() != 1) vm_error("vector-length expects 1 arg");
+    VectorPtr vec = as_vector(args[0]);
+    return make_int(BigInt(static_cast<long long>(vec->size())));
+}
+
+static ValuePtr prim_vector_ref(const ValueVec& args) {
+    if (args.size() != 2) vm_error("vector-ref expects 2 args");
+    VectorPtr vec = as_vector(args[0]);
+    BigInt& idx = as_int(args[1]);
+    
+    long long i = bigint_to_ll(idx);
+    if (i < 0 || static_cast<std::size_t>(i) >= vec->size()) {
+        vm_error("vector-ref: index out of range");
+    }
+    return vec->at(static_cast<std::size_t>(i));
+}
+
+static ValuePtr prim_vector_set(const ValueVec& args) {
+    if (args.size() != 3) vm_error("vector-set! expects 3 args");
+    VectorPtr vec = as_vector(args[0]);
+    BigInt& idx = as_int(args[1]);
+    ValuePtr val = args[2];
+    
+    long long i = bigint_to_ll(idx);
+    if (i < 0 || static_cast<std::size_t>(i) >= vec->size()) {
+        vm_error("vector-set!: index out of range");
+    }
+    vec->at(static_cast<std::size_t>(i)) = val;
+    return make_symbol(":undef");
+}
+
+static ValuePtr prim_vector_to_list(const ValueVec& args) {
+    if (args.size() != 1) vm_error("vector->list expects 1 arg");
+    VectorPtr vec = as_vector(args[0]);
+    return list_from_vector(vec->elements);
+}
+
+static ValuePtr prim_list_to_vector(const ValueVec& args) {
+    if (args.size() != 1) vm_error("list->vector expects 1 arg");
+    ValueVec elems = vector_from_list(args[0]);
+    return make_vector_value(elems);
+}
+
 static void init_globals() {
     g_nil = make_value(NilTag{});
     g_globals.clear();
     g_macros.clear();
     g_symbol_intern.clear();
+    
     g_globals["true"] = make_bool(true);
     g_globals["false"] = make_bool(false);
     g_globals["nil"] = g_nil;
@@ -2095,6 +2429,36 @@ static void init_globals() {
     
     // ファイルロード
     g_globals["load"] = make_prim(prim_load);
+    
+    // 文字列操作（新規追加）
+    g_globals["string?"] = make_prim(prim_stringp);
+    g_globals["make-string"] = make_prim(prim_make_string);
+    g_globals["string-length"] = make_prim(prim_string_length);
+    g_globals["string-ref"] = make_prim(prim_string_ref);
+    g_globals["string-set!"] = make_prim(prim_string_set);
+    g_globals["substring"] = make_prim(prim_substring);
+    g_globals["string-append"] = make_prim(prim_string_append);
+    g_globals["string->list"] = make_prim(prim_string_to_list);
+    g_globals["list->string"] = make_prim(prim_list_to_string);
+    g_globals["string=?"] = make_prim(prim_string_eq);
+    g_globals["string<?"] = make_prim(prim_string_lt);
+    g_globals["string>?"] = make_prim(prim_string_gt);
+    g_globals["string<=?"] = make_prim(prim_string_le);
+    g_globals["string>=?"] = make_prim(prim_string_ge);
+    g_globals["number->string"] = make_prim(prim_number_to_string);
+    g_globals["string->number"] = make_prim(prim_string_to_number);
+    g_globals["char->integer"] = make_prim(prim_char_to_integer);
+    g_globals["integer->char"] = make_prim(prim_integer_to_char);
+    
+    // ベクター操作（新規追加）
+    g_globals["vector?"] = make_prim(prim_vectorp);
+    g_globals["make-vector"] = make_prim(prim_make_vector);
+    g_globals["vector"] = make_prim(prim_vector);
+    g_globals["vector-length"] = make_prim(prim_vector_length);
+    g_globals["vector-ref"] = make_prim(prim_vector_ref);
+    g_globals["vector-set!"] = make_prim(prim_vector_set);
+    g_globals["vector->list"] = make_prim(prim_vector_to_list);
+    g_globals["list->vector"] = make_prim(prim_list_to_vector);
 }
 
 static ValueVec read_all_exprs(const std::string& src) {
