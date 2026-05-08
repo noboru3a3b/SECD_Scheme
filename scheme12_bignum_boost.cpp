@@ -173,6 +173,20 @@ struct Closure : public gc {
         : params(std::move(p)), rest_param(std::move(r)), body(b), captured_env(std::move(env)) {}
 };
 
+struct Macro : public gc {
+    ClosurePtr transformer;
+    explicit Macro(ClosurePtr t) : transformer(t) {}
+};
+
+using MacroPtr = Macro*;
+
+struct SpecialForm : public gc {
+    std::string name;
+    explicit SpecialForm(const std::string& n) : name(n) {}
+};
+
+using SpecialFormPtr = SpecialForm*;
+
 struct DumpFrame {
     ValueVec s;
     ValueVec e;
@@ -194,7 +208,8 @@ using PrimitiveFn = std::function<ValuePtr(const ValueVec&)>;
 
 struct Value : public gc {
     using Data = std::variant<NilTag, bool, BigIntPtr, std::string, Symbol, PairPtr, 
-                             ClosurePtr, ContPtr, PrimitiveFn, FilePortPtr, VectorPtr>;  // VectorPtrを追加
+                             ClosurePtr, ContPtr, PrimitiveFn, FilePortPtr, VectorPtr, 
+                             MacroPtr, SpecialFormPtr>;  // SpecialFormPtrを追加
     Data data;
     explicit Value(Data d) : data(std::move(d)) {}
 };
@@ -304,6 +319,11 @@ static ValuePtr make_vector_value(std::size_t size, ValuePtr init = nullptr) {
 static ValuePtr make_vector_value(const ValueVec& elems) {
     VectorPtr vec = new Vector(elems);
     return make_vector_value(vec);
+}
+
+static ValuePtr make_special_form(const std::string& name) {
+    SpecialFormPtr sf = new SpecialForm(name);
+    return make_value(sf);
 }
 
 static bool is_vector(const ValuePtr& v) {
@@ -433,12 +453,13 @@ static std::string to_string(const ValuePtr& v) {
     if (std::holds_alternative<ClosurePtr>(v->data)) return "#<closure>";
     if (std::holds_alternative<ContPtr>(v->data)) return "#<continuation>";
     if (std::holds_alternative<PrimitiveFn>(v->data)) return "#<primitive>";
+    if (std::holds_alternative<MacroPtr>(v->data)) return "#<macro>";
+    if (std::holds_alternative<SpecialFormPtr>(v->data)) return "#<special-form>";  // 追加
     if (std::holds_alternative<FilePortPtr>(v->data)) {
         FilePortPtr port = std::get<FilePortPtr>(v->data);
         if (port->is_closed) return "#<closed-port>";
         return port->is_input ? "#<input-port>" : "#<output-port>";
     }
-    // ベクター表示の追加
     if (std::holds_alternative<VectorPtr>(v->data)) {
         VectorPtr vec = std::get<VectorPtr>(v->data);
         std::ostringstream oss;
@@ -1253,11 +1274,24 @@ struct VM {
                     g_globals[ins.sym] = s.back();
                     s.back() = make_symbol(ins.sym);
                     break;
-                case Op::DEFM:
+                case Op::DEFM: {
                     if (s.empty()) vm_error("DEFM stack underflow");
-                    g_macros[ins.sym] = s.back();
+                    ValuePtr macro_closure = s.back();
+                    
+                    // g_macrosには従来通りクロージャを保存（マクロ展開用）
+                    g_macros[ins.sym] = macro_closure;
+                    
+                    // g_globalsにはMacroオブジェクトとして保存（表示用）
+                    if (std::holds_alternative<ClosurePtr>(macro_closure->data)) {
+                        MacroPtr macro = new Macro(std::get<ClosurePtr>(macro_closure->data));
+                        g_globals[ins.sym] = make_value(macro);
+                    } else {
+                        g_globals[ins.sym] = macro_closure;  // fallback
+                    }
+                    
                     s.back() = make_symbol(ins.sym);
                     break;
+                }
                 case Op::LSET: {
                     if (s.empty()) vm_error("LSET stack underflow");
                     std::size_t pos = static_cast<std::size_t>(ins.a);
@@ -2363,6 +2397,26 @@ static void init_globals() {
     g_globals["NIL"] = g_globals["nil"];
     g_globals["T"] = g_globals["true"];
     g_globals[":undef"] = make_symbol(":undef");
+    
+    // 特殊フォームを登録（コンパイラで直接処理されるもの）
+    g_globals["quote"] = make_special_form("quote");
+    g_globals["if"] = make_special_form("if");
+    g_globals["lambda"] = make_special_form("lambda");
+    g_globals["define"] = make_special_form("define");
+    g_globals["define-macro"] = make_special_form("define-macro");
+    g_globals["set!"] = make_special_form("set!");
+    g_globals["call/cc"] = make_special_form("call/cc");
+    g_globals["apply"] = make_special_form("apply");
+    g_globals["begin"] = make_special_form("begin");
+    g_globals["let"] = make_special_form("let");
+    g_globals["let*"] = make_special_form("let*");
+    g_globals["letrec"] = make_special_form("letrec");
+    g_globals["and"] = make_special_form("and");
+    g_globals["or"] = make_special_form("or");
+    g_globals["cond"] = make_special_form("cond");
+    g_globals["case"] = make_special_form("case");
+    g_globals["do"] = make_special_form("do");
+    g_globals["quasiquote"] = make_special_form("quasiquote");
     
     // 算術演算
     g_globals["+"] = make_prim(prim_add);
