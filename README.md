@@ -25,7 +25,7 @@ The actual actions taken are as follows:
 
 - I asked Claude 4.5 Sonnet to implement file input/output functionality. He got it working perfectly with just one try.
 
-- This time, I implemented string and vector manipulation. Once again, Claude Sonnet 4.5 played a crucial role. It wasn't a perfect answer on the first try, but he managed to complete it. Now it's a sufficiently practical system.
+- This time, I implemented string and vector manipulation. Once again, Claude 4.5 Sonnet played a crucial role. It wasn't a perfect answer on the first try, but he managed to complete it. Now it's a sufficiently practical system.
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.
 
