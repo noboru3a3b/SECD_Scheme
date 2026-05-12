@@ -30,11 +30,15 @@ The actual actions taken are as follows:
 - After that, We implemented Debugger in System. Once again, Claude 4.5 Sonnet played a crucial role.
 
 - Then, we had GPT-5 Thinking create the system's instruction manual. It turned out he was incredibly clever.
+
+- Implemented a red-black tree library and wrote test scripts. Author: Claude 4.5 Sonnet.  
   
-SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.
-
-I have built and tested this on clang++ on Ubuntu-24.04 and FreeBSD 15.0-RELEASE, and g++ on Windows 11.
-
+- Also implemented a random number generation function in the system for stress testing of the red-black tree. Author: Claude 4.5 Sonnet.  
+  
+SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
+  
+I have built and tested this on clang++ on Ubuntu-24.04 and FreeBSD 15.0-RELEASE, and g++ on Windows 11.  
+  
 Compiler on Ubuntu:  
 ```
 > clang++ -v  
