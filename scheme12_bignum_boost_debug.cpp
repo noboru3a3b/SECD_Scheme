@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 #include <iomanip>
+#include <random>
 
 #define GC_NO_INLINE_STD_NEW
 
@@ -236,6 +237,9 @@ static StringValueMap g_globals;
 static StringValueMap g_macros;
 static StringValueMap g_symbol_intern;
 static bool g_trace_mode = false;  // トレースモード
+// 乱数生成器
+static std::mt19937 g_random_engine;
+static bool g_random_initialized = false;
 
 [[noreturn]] static void vm_error(const std::string& msg) {
     throw std::runtime_error("scheme12 VM error: " + msg);
@@ -2046,6 +2050,19 @@ static ValuePtr prim_pairp(const ValueVec& args) {
 }
 
 static ValuePtr prim_display(const ValueVec& args) {
+    for (auto& a : args) {
+        if (is_string(a)) {
+            // 文字列は引用符なしで直接出力
+            std::cout << as_string(a);
+        } else {
+            // その他の値は to_string を使用
+            std::cout << to_string(a);
+        }
+    }
+    return args.empty() ? g_nil : args.back();
+}
+
+static ValuePtr prim_write(const ValueVec& args) {
     for (auto& a : args) std::cout << to_string(a);
     return args.empty() ? g_nil : args.back();
 }
@@ -2674,6 +2691,71 @@ static ValuePtr prim_load(const ValueVec& args) {
     return load_from_path(path);
 }
 
+// Random number functions
+static void init_random() {
+    if (!g_random_initialized) {
+        std::random_device rd;
+        g_random_engine.seed(rd());
+        g_random_initialized = true;
+    }
+}
+
+static ValuePtr prim_random(const ValueVec& args) {
+    if (args.size() != 1) {
+        vm_error("random expects 1 argument");
+    }
+    
+    init_random();
+    
+    BigInt& n = as_int(args[0]);
+    if (n <= BigInt(0)) {
+        vm_error("random: argument must be positive");
+    }
+    
+    // Convert to long long for distribution
+    long long max_val = bigint_to_ll(n);
+    if (max_val <= 0 || max_val > LLONG_MAX) {
+        vm_error("random: argument out of range");
+    }
+    
+    std::uniform_int_distribution<long long> dist(0, max_val - 1);
+    long long result = dist(g_random_engine);
+    return make_int(BigInt(result));
+}
+
+static ValuePtr prim_random_seed(const ValueVec& args) {
+    if (args.size() != 1) {
+        vm_error("random-seed expects 1 argument");
+    }
+    
+    BigInt& seed = as_int(args[0]);
+    long long seed_val = bigint_to_ll(seed);
+    
+    g_random_engine.seed(static_cast<unsigned int>(seed_val));
+    g_random_initialized = true;
+    
+    return make_symbol(":ok");
+}
+
+// GC primitives
+static ValuePtr prim_gc_collect(const ValueVec& args) {
+    (void)args;
+    GC_gcollect();
+    return make_symbol(":gc-collected");
+}
+
+static ValuePtr prim_gc_get_heap_size(const ValueVec& args) {
+    (void)args;
+    size_t heap_size = GC_get_heap_size();
+    return make_int(BigInt(static_cast<long long>(heap_size)));
+}
+
+static ValuePtr prim_gc_get_free_bytes(const ValueVec& args) {
+    (void)args;
+    size_t free_bytes = GC_get_free_bytes();
+    return make_int(BigInt(static_cast<long long>(free_bytes)));
+}
+
 // Debug primitives
 
 static ValuePtr prim_compile(const ValueVec& args) {
@@ -2912,6 +2994,7 @@ static void init_globals() {
     
     // I/O
     g_globals["display"] = make_prim("display", prim_display);
+    g_globals["write"] = make_prim("write", prim_write);
     g_globals["newline"] = make_prim("newline", prim_newline);
     g_globals["read"] = make_prim("read", prim_read_from_stdin);
     
@@ -2961,6 +3044,15 @@ static void init_globals() {
     
     // Utilities
     g_globals["gensym"] = make_prim("gensym", prim_gensym);
+    
+    // Random number generation
+    g_globals["random"] = make_prim("random", prim_random);
+    g_globals["random-seed"] = make_prim("random-seed", prim_random_seed);
+    
+    // Garbage collection
+    g_globals["gc-collect"] = make_prim("gc-collect", prim_gc_collect);
+    g_globals["gc-heap-size"] = make_prim("gc-heap-size", prim_gc_get_heap_size);
+    g_globals["gc-free-bytes"] = make_prim("gc-free-bytes", prim_gc_get_free_bytes);
     
     // Debug commands
     g_globals["compile"] = make_prim("compile", prim_compile);
@@ -3045,6 +3137,13 @@ static std::string read_multiline_input() {
 int main(int argc, char** argv) {
     try {
         GC_INIT();
+        // GCのヒープサイズを拡張
+        GC_set_max_heap_size(1024 * 1024 * 1024);  // 1GB
+        GC_enable_incremental();
+        
+        // より積極的なGCを設定
+        GC_set_free_space_divisor(4);  // デフォルトは3、小さいほど頻繁にGC
+        
         init_globals();
         load_startup_libraries(argv[0]);
 
