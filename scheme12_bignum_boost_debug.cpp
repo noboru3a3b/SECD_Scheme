@@ -2737,6 +2737,19 @@ static ValuePtr prim_random_seed(const ValueVec& args) {
     return make_symbol(":ok");
 }
 
+// Symbol/String conversion primitives
+static ValuePtr prim_symbol_to_string(const ValueVec& args) {
+    if (args.size() != 1) vm_error("symbol->string expects 1 arg");
+    if (!is_symbol(args[0])) vm_error("symbol->string expects a symbol");
+    return make_string(as_symbol_name(args[0]));
+}
+
+static ValuePtr prim_string_to_symbol(const ValueVec& args) {
+    if (args.size() != 1) vm_error("string->symbol expects 1 arg");
+    if (!is_string(args[0])) vm_error("string->symbol expects a string");
+    return make_symbol(as_string(args[0]));
+}
+
 // GC primitives
 static ValuePtr prim_gc_collect(const ValueVec& args) {
     (void)args;
@@ -3048,6 +3061,10 @@ static void init_globals() {
     // Random number generation
     g_globals["random"] = make_prim("random", prim_random);
     g_globals["random-seed"] = make_prim("random-seed", prim_random_seed);
+    
+    // Symbol/String conversion (NEW!)
+    g_globals["symbol->string"] = make_prim("symbol->string", prim_symbol_to_string);
+    g_globals["string->symbol"] = make_prim("string->symbol", prim_string_to_symbol);
     
     // Garbage collection
     g_globals["gc-collect"] = make_prim("gc-collect", prim_gc_collect);
