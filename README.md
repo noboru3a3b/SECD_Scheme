@@ -25,9 +25,9 @@ The actual actions taken are as follows:
 
 - I asked Claude 4.5 Sonnet to implement file input/output functionality. He got it working perfectly with just one try.
 
-- After that, We implemented string and vector manipulation. Once again, Claude 4.5 Sonnet played a crucial role.
+- After that, We implemented string and vector manipulation. Author: Claude 4.5 Sonnet.
 
-- After that, We implemented Debugger in System. Once again, Claude 4.5 Sonnet played a crucial role.
+- After that, We implemented Debugger in System. Author: Claude 4.5 Sonnet.
 
 - Then, we had GPT-5 Thinking create the system's instruction manual. It turned out he was incredibly clever.
 
