@@ -162,202 +162,130 @@ scheme12> (vector-length #(1 2 3))
 3
 scheme12> (vector-ref #(a b c) 1)
 b
-scheme12> (load "rbtree_stress_test_safe.scm")
+scheme12> (load "rbtree_lib_improved.scm")
 
 Red-Black Tree Library (Improved) loaded.
 Commands:
   (rb-test)      - Run comprehensive tests
   (rb-example)   - Run simple example
-
-Red-Black Tree Stress Test Library (Safe) loaded.
-Commands:
-  (rb-quick-test)             - Quick 100 insertions test
-  (rb-small-scale-test)       - 500 insertions, 250 deletions
-  (rb-medium-scale-test)      - 2000 insertions, 1000 deletions
-  (rb-large-scale-test-safe)  - Safe large-scale test
-  (gc-info)                   - Show GC information
-  (gc-collect)                - Force garbage collection
 NIL
-scheme12> (rb-test)
+scheme12> (load "hashtable_lib.scm")
 
-=== Red-Black Tree Test ===
+Hash Table Library loaded.
+Supported key types: numbers, strings, symbols, booleans
 
-Inserting: 10, 5, 20, 15, 30, 25, 35, 3, 7, 40, 45, 11, 12
-
-Keys in order: (3 5 7 10 11 12 15 20 25 30 35 40 45)
-
-Tree is valid (black height: 4)
-
-Searching for key 15: ddd
-
-Deleting key 10
-Keys in order: (3 5 7 11 12 15 20 25 30 35 40 45)
-Tree is valid (black height: 4)
-
-Deleting key 20
-Keys in order: (3 5 7 11 12 15 25 30 35 40 45)
-Tree is valid (black height: 4)
-
-Tree structure:
-Tree structure (key:color):
-    45:B
-  40:B
-    35:B
-      30:R
-25:B
-    15:B
-      12:R
-  11:B
-      7:B
-    5:R
-      3:B
-
-
-=== Stress Test ===
-Inserting 0-49...
-Node count: 50
-Tree is valid (black height: 6)
-
-Deleting even numbers...
-Node count: 25
-Remaining keys: (1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49)
-Tree is valid (black height: 5)
-
-=== Test Complete ===
-#(#(#(#(#(":nil" ":nil" 0 1 1) #(":nil" ":nil" 0 5 5) 0 3 3) #(#(":nil" ":nil" 0 9 9) #(":nil" ":nil" 0 13 13) 0 11 11) 0 7 7) #(#(#(":nil" ":nil" 0 17 17) #(":nil" ":nil" 0 21 21) 0 19 19) #(#(":nil" ":nil" 0 25 25) #(":nil" ":nil" 0 29 29) 0 27 27) 0 23 23) 1 15 15) #(#(#(":nil" ":nil" 0 33 33) #(":nil" ":nil" 0 37 37) 0 35 35) #(#(#(":nil" ":nil" 0 41 41) #(":nil" ":nil" 0 45 45) 1 43 43) #(":nil" ":nil" 0 49 49) 0 47 47) 0 39 39) 0 31 31)
-scheme12> (rb-example)
+Commands:
+  (ht-example)          - Simple phonebook example
+  (ht-test-basic)       - Basic functionality test
+  (ht-test-symbols)     - Symbol key test
+  (ht-test-types)       - Mixed type test
+  (ht-test-iteration)   - Iteration test
+  (ht-test-stress 1000) - Stress test with N entries
+NIL
+scheme12> (ht-example)
 
 === Simple Example ===
-Search 50: fifty
-All keys: (25 50 75 100 150)
+Creating phonebook...
+Entries:
+Hash Table {
+  Bob => 080-9876-5432
+  Alice => 090-1234-5678
+  Charlie => 070-1111-2222
+}
+Size: 3
+
+Looking up Alice: 090-1234-5678
+
+Updating Bob:
+Bob => 080-0000-1111
+
+Using macros:
+  (ht-ref phonebook "Charlie") => 070-1111-2222
+  (ht-has? phonebook "Alice") => TRUE
+
+Test completed!
+#(#(#(":nil" ":nil" 0 193452632 ("Bob" . "080-0000-1111")) #(":nil" ":nil" 0 586370061 ("Charlie" . "070-1111-2222")) 0 215236101 ("Alice" . "090-1234-5678")) 3 NIL)
+scheme12> (ht-test-basic)
+
+=== Hash Table Basic Test ===
+Created empty hash table
+Size: 0
+
+Setting key-value pairs:
+Keys: (TRUE 12345 "age" status "city" "name")
+
+Getting values:
+  name => Alice
+  age => 30
+  status => Active
+  12345 => Number key
+  true => FALSE
+  unknown => DEFAULT
+
+Key existence:
+  Has 'name'? TRUE
+  Has 'status'? TRUE
+  Has 'unknown'? FALSE
+
+Updating 'age':
+  age => 31
+
+Deleting 'city':
+  Size: 5
+  Has 'city'? FALSE
+
+Final contents:
+Hash Table {
+  TRUE => Boolean key
+  12345 => Number key
+  age => 31
+  status => Active
+  name => Alice
+}
+Size: 5
+Validating hash table...
 Tree is valid (black height: 3)
+  Tree: PASS
+  Size: stored=5, actual=5 PASS
 
-Tree structure (key:color):
-  150:B
-100:B
-    75:B
-  50:R
-    25:B
+Test completed!
+#(#(#(#(":nil" ":nil" 1 1 (TRUE . "Boolean key")) ":nil" 0 12345 (12345 . "Number key")) #(#(":nil" ":nil" 1 478845423 (status . "Active")) ":nil" 0 2090536008 ("name" . "Alice")) 0 193486130 ("age" . 31)) 5 NIL)
+scheme12> (ht-test-iteration)
 
-#(#(#(":nil" ":nil" 0 25 "twenty-five") #(":nil" ":nil" 0 75 "seventy-five") 1 50 "fifty") #(":nil" ":nil" 0 150 "one-fifty") 0 100 "hundred")
-scheme12> (gc-info)
-Heap size: 4718592 bytes, Free: 16384 bytes
-NIL
-scheme12> (rb-large-scale-test-safe)
+=== Iteration Test ===
+Original:
+Hash Table {
+  a => 1
+  b => 2
+  c => 3
+  d => 4
+  e => 5
+}
+Size: 5
 
-=== Large-Scale Stress Test (Safe) ===
-Test 1: 1000 insertions, 500 deletions
-=== Mixed Random Operations Test (Safe) ===
-Phase 1: Insert 1000 keys
+For-each (multiply by 10):
+  a * 10 = 10
+  b * 10 = 20
+  c * 10 = 30
+  d * 10 = 40
+  e * 10 = 50
 
-=== Random Insertion Test (with GC) ===
-Inserting 1000 random keys (range: 0-9999)
-Generated keys (sample): (7831 7469 6578 977 5671 2824 9013 8894 109 5757 7157 5261 8119 6895 8229 4175 6529 5248 7654 1088 . ..)
-Heap size: 5218304 bytes, Free: 462848 bytes
+Map (square):
+  (1 4 9 16 25)
 
-[Forcing GC...] Heap size: 5218304 bytes, Free: 479232 bytes
-Progress: 100/1000 Heap size: 4792320 bytes, Free: 8192 bytes
-Progress: 200/1000 Heap size: 4788224 bytes, Free: 0 bytes
-Progress: 300/1000 Heap size: 4780032 bytes, Free: 0 bytes
-Progress: 400/1000 Heap size: 4775936 bytes, Free: 0 bytes
-Progress: 500/1000 Heap size: 4780032 bytes, Free: 0 bytes
-Progress: 600/1000 Heap size: 4788224 bytes, Free: 0 bytes
-Progress: 700/1000 Heap size: 4784128 bytes, Free: 0 bytes
-Progress: 800/1000 Heap size: 4784128 bytes, Free: 0 bytes
-Progress: 900/1000 Heap size: 4780032 bytes, Free: 0 bytes
+Filter (even values):
+Hash Table {
+  b => 2
+  d => 4
+}
+Size: 2
 
-Final node count: 962
-Heap size: 4861952 bytes, Free: 0 bytes
-Tree is valid (black height: 9)
-Phase 2: Delete 500 keys
+Fold (sum):
+  15
 
-=== Random Deletion Test (with GC) ===
-Deleting 500 random keys
-Heap size: 4874240 bytes, Free: 24576 bytes
-
-[Forcing GC...] Heap size: 4874240 bytes, Free: 57344 bytes
-Progress: 100/500 Heap size: 16146432 bytes, Free: 2097152 bytes
-Progress: 200/500 Heap size: 26472448 bytes, Free: 2949120 bytes
-Progress: 300/500 Heap size: 33095680 bytes, Free: 2924544 bytes
-Progress: 400/500 Heap size: 41373696 bytes, Free: 3616768 bytes
-
-Final node count: 462
-Heap size: 53956608 bytes, Free: 11919360 bytes
-Tree is valid (black height: 8)
-
-Test 2: 3000 insertions, 1500 deletions
-=== Mixed Random Operations Test (Safe) ===
-Phase 1: Insert 3000 keys
-
-=== Random Insertion Test (with GC) ===
-Inserting 3000 random keys (range: 0-29999)
-Generated keys (sample): (7742 13787 13355 7260 27388 27116 24018 5971 19474 29389 28330 22515 3653 13057 23764 26128 22807 23154 3348 10015 . ..)
-Heap size: 53956608 bytes, Free: 11595776 bytes
-
-[Forcing GC...] Heap size: 53956608 bytes, Free: 36073472 bytes
-Progress: 100/3000 Heap size: 17424384 bytes, Free: 81920 bytes
-Progress: 200/3000 Heap size: 17223680 bytes, Free: 0 bytes
-Progress: 300/3000 Heap size: 17219584 bytes, Free: 4096 bytes
-Progress: 400/3000 Heap size: 17178624 bytes, Free: 12288 bytes
-Progress: 500/3000 Heap size: 17154048 bytes, Free: 0 bytes
-Progress: 600/3000 Heap size: 17133568 bytes, Free: 0 bytes
-Progress: 700/3000 Heap size: 17080320 bytes, Free: 0 bytes
-Progress: 800/3000 Heap size: 16961536 bytes, Free: 0 bytes
-Progress: 900/3000 Heap size: 16936960 bytes, Free: 36864 bytes
-Progress: 1000/3000 Heap size: 16785408 bytes, Free: 0 bytes
-[Forcing GC...] Heap size: 16785408 bytes, Free: 0 bytes
-Progress: 1100/3000 Heap size: 16785408 bytes, Free: 20480 bytes
-Progress: 1200/3000 Heap size: 16764928 bytes, Free: 0 bytes
-Progress: 1300/3000 Heap size: 16764928 bytes, Free: 0 bytes
-Progress: 1400/3000 Heap size: 16764928 bytes, Free: 0 bytes
-Progress: 1500/3000 Heap size: 16764928 bytes, Free: 0 bytes
-Progress: 1600/3000 Heap size: 16764928 bytes, Free: 0 bytes
-Progress: 1700/3000 Heap size: 16764928 bytes, Free: 0 bytes
-Progress: 1800/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 1900/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2000/3000 Heap size: 16760832 bytes, Free: 0 bytes
-[Forcing GC...] Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2100/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2200/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2300/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2400/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2500/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2600/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2700/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2800/3000 Heap size: 16760832 bytes, Free: 0 bytes
-Progress: 2900/3000 Heap size: 16760832 bytes, Free: 0 bytes
-
-Final node count: 2842
-Heap size: 16723968 bytes, Free: 0 bytes
-Tree is valid (black height: 10)
-Phase 2: Delete 1500 keys
-
-=== Random Deletion Test (with GC) ===
-Deleting 1500 random keys
-Heap size: 16764928 bytes, Free: 45056 bytes
-
-[Forcing GC...] Heap size: 16764928 bytes, Free: 53248 bytes
-Progress: 100/1500 Heap size: 35852288 bytes, Free: 24576 bytes
-Progress: 200/1500 Heap size: 79122432 bytes, Free: 7188480 bytes
-Progress: 300/1500 Heap size: 104312832 bytes, Free: 8294400 bytes
-Progress: 400/1500 Heap size: 121065472 bytes, Free: 4599808 bytes
-Progress: 500/1500 Heap size: 146231296 bytes, Free: 1347584 bytes
-Progress: 600/1500 Heap size: 196562944 bytes, Free: 28913664 bytes
-Progress: 700/1500 Heap size: 204951552 bytes, Free: 8421376 bytes
-Progress: 800/1500 Heap size: 230117376 bytes, Free: 13520896 bytes
-Progress: 900/1500 Heap size: 246894592 bytes, Free: 15917056 bytes
-Progress: 1000/1500 Heap size: 263671808 bytes, Free: 10244096 bytes
-[Forcing GC...] Heap size: 263671808 bytes, Free: 14692352 bytes
-Progress: 1100/1500 Heap size: 280449024 bytes, Free: 11653120 bytes
-Progress: 1200/1500 Heap size: 297226240 bytes, Free: 3899392 bytes
-Progress: 1300/1500 Heap size: 322392064 bytes, Free: 8916992 bytes
-Progress: 1400/1500 Heap size: 330780672 bytes, Free: 9584640 bytes
-
-Final node count: 1342
-Heap size: 347557888 bytes, Free: 4698112 bytes
-Tree is valid (black height: 9)
-
-=== All tests completed ===
-NIL
-scheme12>
+To alist:
+  (("a" . 1) ("b" . 2) ("c" . 3) ("d" . 4) ("e" . 5))
+#(#(#(#(":nil" ":nil" 0 177670 ("a" . 1)) #(":nil" ":nil" 0 177672 ("c" . 3)) 1 177671 ("b" . 2)) #(":nil" ":nil" 0 177674 ("e" . 5)) 0 177673 ("d" . 4)) 5 NIL)
+scheme12>  
+  
 ```
