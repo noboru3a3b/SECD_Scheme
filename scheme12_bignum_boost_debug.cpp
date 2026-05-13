@@ -2050,26 +2050,79 @@ static ValuePtr prim_pairp(const ValueVec& args) {
 }
 
 static ValuePtr prim_display(const ValueVec& args) {
-    for (auto& a : args) {
-        if (is_string(a)) {
-            // 文字列は引用符なしで直接出力
-            std::cout << as_string(a);
-        } else {
-            // その他の値は to_string を使用
-            std::cout << to_string(a);
-        }
+    if (args.empty() || args.size() > 2) {
+        vm_error("display expects 1 or 2 args");
     }
-    return args.empty() ? g_nil : args.back();
+    
+    ValuePtr val = args[0];
+    std::FILE* out = stdout;
+    
+    // 2引数の場合はポート指定
+    if (args.size() == 2) {
+        if (!std::holds_alternative<FilePortPtr>(args[1]->data)) {
+            vm_error("display: second arg must be a port");
+        }
+        FilePortPtr port = std::get<FilePortPtr>(args[1]->data);
+        if (port->is_input || port->is_closed || !port->fp) {
+            vm_error("display: port is not an open output port");
+        }
+        out = port->fp;
+    }
+    
+    // 文字列は引用符なしで直接出力、それ以外はto_stringを使用
+    if (is_string(val)) {
+        std::fprintf(out, "%s", as_string(val).c_str());
+    } else {
+        std::fprintf(out, "%s", to_string(val).c_str());
+    }
+    
+    return val;
 }
 
 static ValuePtr prim_write(const ValueVec& args) {
-    for (auto& a : args) std::cout << to_string(a);
-    return args.empty() ? g_nil : args.back();
+    if (args.empty() || args.size() > 2) {
+        vm_error("write expects 1 or 2 args");
+    }
+    
+    ValuePtr val = args[0];
+    std::FILE* out = stdout;
+    
+    // 2引数の場合はポート指定
+    if (args.size() == 2) {
+        if (!std::holds_alternative<FilePortPtr>(args[1]->data)) {
+            vm_error("write: second arg must be a port");
+        }
+        FilePortPtr port = std::get<FilePortPtr>(args[1]->data);
+        if (port->is_input || port->is_closed || !port->fp) {
+            vm_error("write: port is not an open output port");
+        }
+        out = port->fp;
+    }
+    
+    std::fprintf(out, "%s", to_string(val).c_str());
+    return val;
 }
 
 static ValuePtr prim_newline(const ValueVec& args) {
-    (void)args;
-    std::cout << "\n";
+    if (args.size() > 1) {
+        vm_error("newline expects 0 or 1 arg");
+    }
+    
+    std::FILE* out = stdout;
+    
+    // 1引数の場合はポート指定
+    if (args.size() == 1) {
+        if (!std::holds_alternative<FilePortPtr>(args[0]->data)) {
+            vm_error("newline: arg must be a port");
+        }
+        FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
+        if (port->is_input || port->is_closed || !port->fp) {
+            vm_error("newline: port is not an open output port");
+        }
+        out = port->fp;
+    }
+    
+    std::fprintf(out, "\n");
     return g_nil;
 }
 
@@ -2155,38 +2208,18 @@ static ValuePtr prim_read_line(const ValueVec& args) {
     return make_string(line);
 }
 
-static ValuePtr prim_write_to_port(const ValueVec& args) {
-    if (args.size() != 2) {
-        vm_error("write expects 2 args (string, port)");
-    }
-    if (!std::holds_alternative<std::string>(args[0]->data)) {
-        vm_error("write: first arg must be a string");
-    }
-    if (!std::holds_alternative<FilePortPtr>(args[1]->data)) {
-        vm_error("write: second arg must be a port");
-    }
-    
-    std::string text = std::get<std::string>(args[0]->data);
-    FilePortPtr port = std::get<FilePortPtr>(args[1]->data);
-    
-    if (port->is_input || port->is_closed || !port->fp) {
-        vm_error("write: port is not an open output port");
-    }
-    
-    std::fwrite(text.c_str(), 1, text.size(), port->fp);
-    return g_nil;
-}
-
+// prim_write_newline は元のまま（1引数必須・ポート専用）
 static ValuePtr prim_write_newline(const ValueVec& args) {
-    if (args.size() != 1 || !std::holds_alternative<FilePortPtr>(args[0]->data)) {
-        vm_error("write_newline expects a port");
+    if (args.size() != 1) {
+        vm_error("write_newline expects 1 arg (port)");
+    }
+    if (!std::holds_alternative<FilePortPtr>(args[0]->data)) {
+        vm_error("write_newline: arg must be a port");
     }
     FilePortPtr port = std::get<FilePortPtr>(args[0]->data);
-    
     if (port->is_input || port->is_closed || !port->fp) {
         vm_error("write_newline: port is not an open output port");
     }
-    
     std::fputc('\n', port->fp);
     return g_nil;
 }
@@ -3017,8 +3050,7 @@ static void init_globals() {
     g_globals["close-input-port"] = make_prim("close-input-port", prim_close_input_port);
     g_globals["close-output-port"] = make_prim("close-output-port", prim_close_output_port);
     g_globals["read-line"] = make_prim("read-line", prim_read_line);
-    g_globals["write"] = make_prim("write", prim_write_to_port);
-    g_globals["write_newline"] = make_prim("write_newline", prim_write_newline);
+    g_globals["write_newline"] = make_prim("write_newline", prim_write_newline);  // 元のまま残す
     g_globals["eof-object?"] = make_prim("eof-object?", prim_eof_objectp);
     g_globals["read-char"] = make_prim("read-char", prim_read_char);
     g_globals["write-char"] = make_prim("write-char", prim_write_char);
