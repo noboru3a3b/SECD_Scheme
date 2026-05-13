@@ -35,7 +35,7 @@ The actual actions taken are as follows:
   
 - Also implemented a random number generation function in the system for stress testing of the red-black tree. Author: Claude 4.5 Sonnet.  
   
-- Now, based on the red-black tree library, implemented a hash table library. Author: Claude 4.5 Sonnet.  
+- Based on the red-black tree library, we implemented a hash table library. Author: Claude 4.5 Sonnet.  
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
