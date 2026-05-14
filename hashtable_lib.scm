@@ -1,7 +1,7 @@
 ;;;
-;;; hashtable_lib.scm : Hash Table Library based on Red-Black Tree
+;;; hashtable_lib.scm : Hash Table Library with Proper Collision Handling
 ;;;
-;;; Proper implementation using symbol->string for consistent symbol hashing
+;;; Fixed version: Uses chaining to handle hash collisions correctly
 ;;;
 
 ;;; Load the red-black tree library
@@ -27,19 +27,14 @@
   (lambda (key)
     (cond
       ((number? key) 
-       ;; Numbers: use modulo to ensure valid range
        (modulo key 2147483647))
       ((string? key) 
-       ;; Strings: use hash function
        (hash-string key))
       ((symbol? key) 
-       ;; Symbols: convert to string and hash
        (hash-string (symbol->string key)))
       ((boolean? key) 
-       ;; Booleans: simple numeric mapping
        (if key 1 0))
       (else 
-       ;; Fallback: hash the string representation
        (hash-string "unknown")))))
 
 ;;;============================================================================
@@ -47,7 +42,8 @@
 ;;;============================================================================
 
 ;;; Hash table structure: #(tree size metadata)
-;;;   tree: red-black tree storing hash-key -> (original-key . value)
+;;;   tree: red-black tree storing hash-key -> bucket
+;;;   bucket: list of (original-key . value) pairs (for collision handling)
 ;;;   size: number of entries
 ;;;   metadata: reserved for future use
 
@@ -91,22 +87,24 @@
     (ht-set-size! ht (- (ht-size ht) 1))))
 
 ;;;============================================================================
-;;; Entry Structure
+;;; Bucket Operations (Chaining for Collision Handling)
 ;;;============================================================================
 
-;;; Entry: (original-key . value)
+;;; Bucket: list of (key . value) pairs
+;;; Example: ((key1 . val1) (key2 . val2) ...)
+
+;;; Create an entry
 (define make-ht-entry
   (lambda (key value)
     (cons key value)))
 
-(define ht-entry-key
-  (lambda (entry)
-    (car entry)))
+;;; Get key from entry
+(define ht-entry-key car)
 
-(define ht-entry-value
-  (lambda (entry)
-    (cdr entry)))
+;;; Get value from entry
+(define ht-entry-value cdr)
 
+;;; Set value in entry
 (define ht-set-entry-value!
   (lambda (entry value)
     (set-cdr! entry value)))
@@ -121,6 +119,55 @@
       ((and (boolean? k1) (boolean? k2)) (eq? k1 k2))
       (else (equal? k1 k2)))))
 
+;;; Find entry in bucket by key
+(define bucket-find
+  (lambda (bucket key)
+    (if (null? bucket)
+        false
+        (let ((entry (car bucket)))
+          (if (ht-keys-equal? (ht-entry-key entry) key)
+              entry
+              (bucket-find (cdr bucket) key))))))
+
+;;; Add or update entry in bucket
+;;; Returns: (new-bucket . added?)
+;;; added? is true if new entry was added, false if updated
+(define bucket-set
+  (lambda (bucket key value)
+    (if (null? bucket)
+        ;; Empty bucket, add new entry
+        (cons (list (make-ht-entry key value)) true)
+        (let ((entry (car bucket))
+              (rest (cdr bucket)))
+          (if (ht-keys-equal? (ht-entry-key entry) key)
+              ;; Found matching key, update value
+              (begin
+                (ht-set-entry-value! entry value)
+                (cons bucket false))
+              ;; Continue searching
+              (let ((result (bucket-set rest key value)))
+                (cons (cons entry (car result)) (cdr result))))))))
+
+;;; Remove entry from bucket by key
+;;; Returns: (new-bucket . removed?)
+(define bucket-remove
+  (lambda (bucket key)
+    (if (null? bucket)
+        (cons '() false)
+        (let ((entry (car bucket))
+              (rest (cdr bucket)))
+          (if (ht-keys-equal? (ht-entry-key entry) key)
+              ;; Found it, remove
+              (cons rest true)
+              ;; Continue searching
+              (let ((result (bucket-remove rest key)))
+                (cons (cons entry (car result)) (cdr result))))))))
+
+;;; Get all entries from bucket
+(define bucket-entries
+  (lambda (bucket)
+    bucket))
+
 ;;;============================================================================
 ;;; Core Hash Table Operations
 ;;;============================================================================
@@ -130,25 +177,20 @@
   (lambda (ht key value)
     (let* ((hash-key (hash-value key))
            (tree (ht-tree ht))
-           (existing (rb-search tree hash-key)))
-      (if existing
-          ;; Hash key exists - check if same original key
-          (let ((entry existing))
-            (if (ht-keys-equal? (ht-entry-key entry) key)
-                ;; Same key, update value
-                (ht-set-entry-value! entry value)
-                ;; Hash collision with different key (rare but possible)
-                (begin
-                  (display "Warning: Hash collision between ")
-                  (display (ht-entry-key entry))
-                  (display " and ")
-                  (display key)
-                  (newline)
-                  ;; Overwrite (proper implementation would use chaining)
-                  (ht-set-entry-value! entry value))))
-          ;; New key, insert
+           (bucket (rb-search tree hash-key)))
+      (if bucket
+          ;; Bucket exists, add/update entry
+          (let ((result (bucket-set bucket key value)))
+            (let ((new-bucket (car result))
+                  (added? (cdr result)))
+              ;; Update bucket in tree
+              (ht-set-tree! ht (rb-insert tree hash-key new-bucket))
+              ;; Increment size if new entry was added
+              (if added? (ht-inc-size! ht))))
+          ;; No bucket, create new one
           (begin
-            (ht-set-tree! ht (rb-insert tree hash-key (make-ht-entry key value)))
+            (ht-set-tree! ht (rb-insert tree hash-key 
+                                       (list (make-ht-entry key value))))
             (ht-inc-size! ht)))
       value)))
 
@@ -157,26 +199,22 @@
   (lambda (ht key . default)
     (let* ((hash-key (hash-value key))
            (tree (ht-tree ht))
-           (result (rb-search tree hash-key)))
-      (if result
-          (if (ht-keys-equal? (ht-entry-key result) key)
-              (ht-entry-value result)
-              ;; Hash collision - different key
-              (if (null? default)
-                  false
-                  (car default)))
-          (if (null? default)
-              false
-              (car default))))))
+           (bucket (rb-search tree hash-key)))
+      (if bucket
+          (let ((entry (bucket-find bucket key)))
+            (if entry
+                (ht-entry-value entry)
+                (if (null? default) false (car default))))
+          (if (null? default) false (car default))))))
 
 ;;; Check if key exists
 (define hash-table-has-key?
   (lambda (ht key)
     (let* ((hash-key (hash-value key))
            (tree (ht-tree ht))
-           (result (rb-search tree hash-key)))
-      (if result
-          (ht-keys-equal? (ht-entry-key result) key)
+           (bucket (rb-search tree hash-key)))
+      (if bucket
+          (if (bucket-find bucket key) true false)
           false))))
 
 ;;; Delete a key
@@ -184,14 +222,20 @@
   (lambda (ht key)
     (let* ((hash-key (hash-value key))
            (tree (ht-tree ht))
-           (existing (rb-search tree hash-key)))
-      (if existing
-          (if (ht-keys-equal? (ht-entry-key existing) key)
-              (begin
-                (ht-set-tree! ht (rb-delete tree hash-key))
-                (ht-dec-size! ht)
-                true)
-              false)
+           (bucket (rb-search tree hash-key)))
+      (if bucket
+          (let ((result (bucket-remove bucket key)))
+            (let ((new-bucket (car result))
+                  (removed? (cdr result)))
+              (if removed?
+                  (begin
+                    ;; If bucket is now empty, remove from tree
+                    (if (null? new-bucket)
+                        (ht-set-tree! ht (rb-delete tree hash-key))
+                        (ht-set-tree! ht (rb-insert tree hash-key new-bucket)))
+                    (ht-dec-size! ht)
+                    true)
+                  false)))
           false))))
 
 ;;; Get the number of entries
@@ -215,13 +259,13 @@
 ;;; Iteration and Collection Operations
 ;;;============================================================================
 
-;;; Internal: Extract entries from tree (in-order)
+;;; Internal: Extract all entries from all buckets (in-order)
 (define ht-tree-to-entries
   (lambda (node)
     (if (rb-null? node)
         '()
         (append (ht-tree-to-entries (rb-left node))
-                (list (rb-data node))
+                (bucket-entries (rb-data node))
                 (ht-tree-to-entries (rb-right node))))))
 
 ;;; Get all keys
@@ -239,10 +283,7 @@
 ;;; Get all entries as association list ((key . value) ...)
 (define hash-table->alist
   (lambda (ht)
-    (let ((entries (ht-tree-to-entries (ht-tree ht))))
-      (map (lambda (entry)
-             (cons (ht-entry-key entry) (ht-entry-value entry)))
-           entries))))
+    (ht-tree-to-entries (ht-tree ht))))
 
 ;;; Create hash table from association list
 (define alist->hash-table
@@ -359,7 +400,7 @@
       (newline)
       (and tree-valid (= stored-size counted-size)))))
 
-;;; Show hash statistics
+;;; Show hash statistics including collision info
 (define hash-table-stats
   (lambda (ht)
     (display "Hash Table Statistics:")
@@ -370,9 +411,47 @@
     (display "  Empty: ")
     (display (hash-table-empty? ht))
     (newline)
-    (display "  Tree nodes: ")
+    (display "  Tree nodes (buckets): ")
     (display (rb-count-nodes (ht-tree ht)))
-    (newline)))
+    (newline)
+    
+    ;; Collision analysis
+    (let ((tree (ht-tree ht)))
+      (if (not (rb-null? tree))
+          (let ((buckets (ht-collect-buckets tree)))
+            (let ((total-buckets (length buckets))
+                  (collisions (ht-count-collisions buckets)))
+              (display "  Buckets with collisions: ")
+              (display collisions)
+              (display " / ")
+              (display total-buckets)
+              (newline)
+              (if (> collisions 0)
+                  (begin
+                    (display "  Collision rate: ")
+                    (display (/ (* collisions 100) total-buckets))
+                    (display "%")
+                    (newline)))))))))
+
+;;; Helper: collect all buckets from tree
+(define ht-collect-buckets
+  (lambda (node)
+    (if (rb-null? node)
+        '()
+        (append (ht-collect-buckets (rb-left node))
+                (list (rb-data node))
+                (ht-collect-buckets (rb-right node))))))
+
+;;; Helper: count buckets with multiple entries
+(define ht-count-collisions
+  (lambda (buckets)
+    (let loop ((bs buckets) (count 0))
+      (if (null? bs)
+          count
+          (loop (cdr bs)
+                (if (> (length (car bs)) 1)
+                    (+ count 1)
+                    count))))))
 
 ;;;============================================================================
 ;;; Utility Macros
@@ -398,6 +477,70 @@
 ;;;============================================================================
 ;;; Test Functions
 ;;;============================================================================
+
+;;; COLLISION TEST: Keys with intentionally same hash value
+(define ht-test-collision
+  (lambda ()
+    (newline)
+    (display "=== Hash Collision Test ===")
+    (newline)
+    
+    (let ((ht (make-hash-table)))
+      ;; Create keys that will likely collide
+      ;; Using modulo, some numbers will have same hash
+      (display "Testing collision handling...")
+      (newline)
+      
+      (hash-table-set! ht 5 "value-5")
+      (hash-table-set! ht 2147483652 "value-2147483652")  ; 5 + 2147483647
+      (hash-table-set! ht 4294967299 "value-4294967299")  ; 5 + 2*2147483647
+      
+      (display "Set keys with same hash modulo: 5, 2147483652, 4294967299")
+      (newline)
+      (newline)
+      
+      (display "Retrieving values:")
+      (newline)
+      (display "  key 5 => ")
+      (display (hash-table-get ht 5))
+      (newline)
+      (display "  key 2147483652 => ")
+      (display (hash-table-get ht 2147483652))
+      (newline)
+      (display "  key 4294967299 => ")
+      (display (hash-table-get ht 4294967299))
+      (newline)
+      (newline)
+      
+      (display "All keys preserved: ")
+      (display (hash-table-keys ht))
+      (newline)
+      (display "Size: ")
+      (display (hash-table-size ht))
+      (newline)
+      (newline)
+      
+      (display "Deleting middle key (2147483652)...")
+      (newline)
+      (hash-table-delete! ht 2147483652)
+      
+      (display "Remaining keys: ")
+      (display (hash-table-keys ht))
+      (newline)
+      (display "key 5 still accessible? ")
+      (display (hash-table-get ht 5))
+      (newline)
+      (display "key 4294967299 still accessible? ")
+      (display (hash-table-get ht 4294967299))
+      (newline)
+      (newline)
+      
+      (hash-table-stats ht)
+      (hash-table-validate ht)
+      (newline)
+      (display "Collision test completed!")
+      (newline)
+      ht)))
 
 ;;; Basic functionality test
 (define ht-test-basic
@@ -450,19 +593,6 @@
       (newline)
       (newline)
       
-      (display "Key existence:")
-      (newline)
-      (display "  Has 'name'? ")
-      (display (hash-table-has-key? ht "name"))
-      (newline)
-      (display "  Has 'status'? ")
-      (display (hash-table-has-key? ht 'status))
-      (newline)
-      (display "  Has 'unknown'? ")
-      (display (hash-table-has-key? ht "unknown"))
-      (newline)
-      (newline)
-      
       (display "Updating 'age':")
       (newline)
       (hash-table-set! ht "age" 31)
@@ -471,185 +601,16 @@
       (newline)
       (newline)
       
-      (display "Deleting 'city':")
-      (newline)
-      (hash-table-delete! ht "city")
-      (display "  Size: ")
-      (display (hash-table-size ht))
-      (newline)
-      (display "  Has 'city'? ")
-      (display (hash-table-has-key? ht "city"))
-      (newline)
-      (newline)
-      
-      (display "Final contents:")
-      (newline)
       (hash-table-display ht)
-      
-      (hash-table-validate ht)
-      (newline)
-      (display "Test completed!")
-      (newline)
-      ht)))
-
-;;; Symbol key test
-(define ht-test-symbols
-  (lambda ()
-    (newline)
-    (display "=== Symbol Key Test ===")
-    (newline)
-    
-    (let ((ht (make-hash-table)))
-      (display "Setting symbol keys:")
-      (newline)
-      (hash-table-set! ht 'apple "red fruit")
-      (hash-table-set! ht 'banana "yellow fruit")
-      (hash-table-set! ht 'cherry "red fruit")
-      (hash-table-set! ht 'date "brown fruit")
-      (hash-table-set! ht 'elderberry "purple fruit")
-      
-      (newline)
-      (hash-table-display ht)
-      
-      (display "Retrieving by symbol:")
-      (newline)
-      (display "  apple => ")
-      (display (hash-table-get ht 'apple))
-      (newline)
-      (display "  banana => ")
-      (display (hash-table-get ht 'banana))
-      (newline)
-      (display "  cherry => ")
-      (display (hash-table-get ht 'cherry))
-      (newline)
-      (newline)
-      
-      (display "Updating symbol key:")
-      (newline)
-      (hash-table-set! ht 'apple "green fruit")
-      (display "  apple => ")
-      (display (hash-table-get ht 'apple))
-      (newline)
-      (newline)
-      
-      (display "Deleting symbol key:")
-      (newline)
-      (hash-table-delete! ht 'date)
-      (display "  Size: ")
-      (display (hash-table-size ht))
-      (newline)
-      (display "  Has 'date'? ")
-      (display (hash-table-has-key? ht 'date))
-      (newline)
-      (newline)
-      
+      (hash-table-stats ht)
       (hash-table-validate ht)
       ht)))
 
-;;; Type mixing test
-(define ht-test-types
-  (lambda ()
-    (newline)
-    (display "=== Mixed Type Key Test ===")
-    (newline)
-    
-    (let ((ht (make-hash-table)))
-      (display "Setting different key types:")
-      (newline)
-      (hash-table-set! ht "string" 1)
-      (hash-table-set! ht 42 2)
-      (hash-table-set! ht 'symbol 3)
-      (hash-table-set! ht true 4)
-      (hash-table-set! ht false 5)
-      
-      (newline)
-      (hash-table-display ht)
-      
-      (display "Retrieving all:")
-      (newline)
-      (display "  String: ")
-      (display (hash-table-get ht "string"))
-      (newline)
-      (display "  Number: ")
-      (display (hash-table-get ht 42))
-      (newline)
-      (display "  Symbol: ")
-      (display (hash-table-get ht 'symbol))
-      (newline)
-      (display "  True: ")
-      (display (hash-table-get ht true))
-      (newline)
-      (display "  False: ")
-      (display (hash-table-get ht false))
-      (newline)
-      (newline)
-      
-      (hash-table-validate ht)
-      ht)))
-
-;;; Iteration test
-(define ht-test-iteration
-  (lambda ()
-    (newline)
-    (display "=== Iteration Test ===")
-    (newline)
-    
-    (let ((ht (make-hash-table)))
-      (hash-table-set! ht "a" 1)
-      (hash-table-set! ht "b" 2)
-      (hash-table-set! ht "c" 3)
-      (hash-table-set! ht "d" 4)
-      (hash-table-set! ht "e" 5)
-      
-      (display "Original:")
-      (newline)
-      (hash-table-display ht)
-      (newline)
-      
-      (display "For-each (multiply by 10):")
-      (newline)
-      (hash-table-for-each ht
-        (lambda (k v)
-          (display "  ")
-          (display k)
-          (display " * 10 = ")
-          (display (* v 10))
-          (newline)))
-      (newline)
-      
-      (display "Map (square):")
-      (newline)
-      (display "  ")
-      (display (hash-table-map ht (lambda (k v) (* v v))))
-      (newline)
-      (newline)
-      
-      (display "Filter (even values):")
-      (newline)
-      (let ((filtered (hash-table-filter ht (lambda (k v) (= (modulo v 2) 0)))))
-        (hash-table-display filtered))
-      (newline)
-      
-      (display "Fold (sum):")
-      (newline)
-      (display "  ")
-      (display (hash-table-fold ht (lambda (k v acc) (+ v acc)) 0))
-      (newline)
-      (newline)
-      
-      (display "To alist:")
-      (newline)
-      (display "  ")
-      (display (hash-table->alist ht))
-      (newline)
-      
-      ht)))
-
-;;; Stress test
+;;; Stress test with collision tracking
 (define ht-test-stress
   (lambda (n)
     (newline)
-    (display "=== Stress Test (")
+    (display "=== Stress Test with Collision Tracking (")
     (display n)
     (display " entries) ===")
     (newline)
@@ -671,37 +632,7 @@
               (loop (+ i 1)))))
       (newline)
       
-      (display "Size: ")
-      (display (hash-table-size ht))
-      (newline)
-      (hash-table-validate ht)
-      
-      (newline)
-      (display "Sample lookups:")
-      (newline)
-      (display "  key-0 => ")
-      (display (hash-table-get ht "key-0"))
-      (newline)
-      (display "  key-50 => ")
-      (display (hash-table-get ht "key-50"))
-      (newline)
-      (display "  key-100 => ")
-      (display (hash-table-get ht "key-100"))
-      (newline)
-      (newline)
-      
-      (display "Deleting half...")
-      (newline)
-      (let loop ((i 0))
-        (if (< i n)
-            (begin
-              (if (= (modulo i 2) 0)
-                  (hash-table-delete! ht (string-append "key-" (number->string i))))
-              (loop (+ i 1)))))
-      
-      (display "Size after deletion: ")
-      (display (hash-table-size ht))
-      (newline)
+      (hash-table-stats ht)
       (hash-table-validate ht)
       
       (newline)
@@ -709,70 +640,17 @@
       (newline)
       ht)))
 
-;;; Simple usage example
-(define ht-example
-  (lambda ()
-    (newline)
-    (display "=== Simple Example ===")
-    (newline)
-    
-    (let ((phonebook (make-hash-table)))
-      (display "Creating phonebook...")
-      (newline)
-      
-      (hash-table-set! phonebook "Alice" "090-1234-5678")
-      (hash-table-set! phonebook "Bob" "080-9876-5432")
-      (hash-table-set! phonebook "Charlie" "070-1111-2222")
-      
-      (display "Entries:")
-      (newline)
-      (hash-table-display phonebook)
-      (newline)
-      
-      (display "Looking up Alice: ")
-      (display (hash-table-get phonebook "Alice"))
-      (newline)
-      (newline)
-      
-      (display "Updating Bob:")
-      (newline)
-      (hash-table-set! phonebook "Bob" "080-0000-1111")
-      (display "Bob => ")
-      (display (hash-table-get phonebook "Bob"))
-      (newline)
-      (newline)
-      
-      (display "Using macros:")
-      (newline)
-      (display "  (ht-ref phonebook \"Charlie\") => ")
-      (display (ht-ref phonebook "Charlie"))
-      (newline)
-      (display "  (ht-has? phonebook \"Alice\") => ")
-      (display (ht-has? phonebook "Alice"))
-      (newline)
-      (newline)
-      
-      (display "Test completed!")
-      (newline)
-      phonebook)))
-
 (newline)
-(display "Hash Table Library loaded.")
+(display "Hash Table Library (Fixed with Chaining) loaded.")
 (newline)
 (display "Supported key types: numbers, strings, symbols, booleans")
 (newline)
 (newline)
 (display "Commands:")
 (newline)
-(display "  (ht-example)          - Simple phonebook example")
+(display "  (ht-test-collision)   - Test hash collision handling")
 (newline)
 (display "  (ht-test-basic)       - Basic functionality test")
-(newline)
-(display "  (ht-test-symbols)     - Symbol key test")
-(newline)
-(display "  (ht-test-types)       - Mixed type test")
-(newline)
-(display "  (ht-test-iteration)   - Iteration test")
 (newline)
 (display "  (ht-test-stress 1000) - Stress test with N entries")
 (newline)

@@ -18,6 +18,7 @@
 #include <vector>
 #include <iomanip>
 #include <random>
+#include <unordered_set>  // 循環検出用
 
 #define GC_NO_INLINE_STD_NEW
 
@@ -552,25 +553,48 @@ static ValuePtr list_from_vector(std::initializer_list<ValuePtr> xs) {
     return list_from_vector(temp);
 }
 
+// 循環検出付きvector_from_list
 static ValueVec vector_from_list(ValuePtr ls) {
     ValueVec out;
+    std::unordered_set<void*> visited;
+    
     while (!is_nil(ls)) {
         if (!is_pair(ls)) vm_error("expected proper list");
+        
+        // 循環検出
+        void* addr = static_cast<void*>(std::get<PairPtr>(ls->data));
+        if (visited.count(addr)) {
+            vm_error("circular list detected in vector_from_list");
+        }
+        visited.insert(addr);
+        
         out.push_back(car(ls));
         ls = cdr(ls);
     }
     return out;
 }
 
-static std::string list_to_string(ValuePtr ls) {
+// 循環検出付きlist_to_string
+static std::string list_to_string_with_visited(ValuePtr ls, 
+                                               std::unordered_set<void*>& visited) {
     std::ostringstream oss;
     oss << "(";
     bool first = true;
+    
     while (!is_nil(ls)) {
         if (!is_pair(ls)) {
             oss << " . " << to_string(ls);
             break;
         }
+        
+        // 循環検出
+        void* addr = static_cast<void*>(std::get<PairPtr>(ls->data));
+        if (visited.count(addr)) {
+            oss << " . #<circular>";
+            break;
+        }
+        visited.insert(addr);
+        
         if (!first) oss << " ";
         first = false;
         oss << to_string(car(ls));
@@ -578,6 +602,11 @@ static std::string list_to_string(ValuePtr ls) {
     }
     oss << ")";
     return oss.str();
+}
+
+static std::string list_to_string(ValuePtr ls) {
+    std::unordered_set<void*> visited;
+    return list_to_string_with_visited(ls, visited);
 }
 
 static std::string to_string(const ValuePtr& v) {
@@ -1751,7 +1780,14 @@ static ValuePtr prim_modulo(const ValueVec& args) {
     BigInt& a = as_int(args[0]);
     BigInt& b = as_int(args[1]);
     if (b.is_zero()) vm_error("modulo by zero");
-    return make_int(a % b);
+    
+    // Scheme準拠: 剰余の符号は除数bに一致
+    BigInt r = a % b;
+    if ((r < BigInt(0) && b > BigInt(0)) || 
+        (r > BigInt(0) && b < BigInt(0))) {
+        r = r + b;
+    }
+    return make_int(r);
 }
 
 static ValuePtr prim_num_eq(const ValueVec& args) {
@@ -1903,25 +1939,37 @@ static ValuePtr prim_eqv(const ValueVec& args) {
     return prim_eq(args);
 }
 
+// より堅牢な循環検出（Floyd's cycle detection）
 static bool is_proper_list(ValuePtr v) {
+    if (is_nil(v)) return true;
+    if (!is_pair(v)) return false;
+    
     ValuePtr slow = v;
     ValuePtr fast = v;
+    
     while (true) {
         if (is_nil(fast)) return true;
         if (!is_pair(fast)) return false;
         fast = cdr(fast);
+        
         if (is_nil(fast)) return true;
         if (!is_pair(fast)) return false;
         fast = cdr(fast);
-        if (!is_pair(slow)) return false;
+        
         slow = cdr(slow);
+        
+        // 循環検出：fastとslowが同じになったら循環
         if (slow == fast) return false;
     }
 }
 
-static bool value_equal(ValuePtr a, ValuePtr b) {
+// 循環検出付きequal?実装
+static bool value_equal_with_visited(ValuePtr a, ValuePtr b, 
+                                     std::unordered_set<void*>& visited_a,
+                                     std::unordered_set<void*>& visited_b) {
     if (a == b) return true;
     if (is_nil(a) || is_nil(b)) return is_nil(a) && is_nil(b);
+    
     if (std::holds_alternative<bool>(a->data) && std::holds_alternative<bool>(b->data)) {
         return std::get<bool>(a->data) == std::get<bool>(b->data);
     }
@@ -1936,11 +1984,57 @@ static bool value_equal(ValuePtr a, ValuePtr b) {
     if (std::holds_alternative<Symbol>(a->data) && std::holds_alternative<Symbol>(b->data)) {
         return std::get<Symbol>(a->data).name == std::get<Symbol>(b->data).name;
     }
+    
+    // ベクタの比較を追加
+    if (std::holds_alternative<VectorPtr>(a->data) && 
+        std::holds_alternative<VectorPtr>(b->data)) {
+        VectorPtr va = std::get<VectorPtr>(a->data);
+        VectorPtr vb = std::get<VectorPtr>(b->data);
+        if (va->size() != vb->size()) return false;
+        for (std::size_t i = 0; i < va->size(); ++i) {
+            if (!value_equal_with_visited(va->at(i), vb->at(i), visited_a, visited_b))
+                return false;
+        }
+        return true;
+    }
+    
+    // ペアの比較（循環検出付き）
     if (std::holds_alternative<PairPtr>(a->data) && 
         std::holds_alternative<PairPtr>(b->data)) {
-        return value_equal(car(a), car(b)) && value_equal(cdr(a), cdr(b));
+        PairPtr pa = std::get<PairPtr>(a->data);
+        PairPtr pb = std::get<PairPtr>(b->data);
+        
+        // 循環検出：このペアを既に訪問済みか？
+        void* addr_a = static_cast<void*>(pa);
+        void* addr_b = static_cast<void*>(pb);
+        
+        if (visited_a.count(addr_a) || visited_b.count(addr_b)) {
+            // 循環検出：両方とも訪問済みなら構造的に等しいと仮定
+            return visited_a.count(addr_a) && visited_b.count(addr_b);
+        }
+        
+        // 訪問記録
+        visited_a.insert(addr_a);
+        visited_b.insert(addr_b);
+        
+        // carとcdrを再帰的に比較
+        bool car_equal = value_equal_with_visited(car(a), car(b), visited_a, visited_b);
+        bool cdr_equal = value_equal_with_visited(cdr(a), cdr(b), visited_a, visited_b);
+        
+        // 訪問記録をクリーンアップ（バックトラック）
+        visited_a.erase(addr_a);
+        visited_b.erase(addr_b);
+        
+        return car_equal && cdr_equal;
     }
+    
     return false;
+}
+
+static bool value_equal(ValuePtr a, ValuePtr b) {
+    std::unordered_set<void*> visited_a;
+    std::unordered_set<void*> visited_b;
+    return value_equal_with_visited(a, b, visited_a, visited_b);
 }
 
 static ValuePtr prim_equal(const ValueVec& args) {
