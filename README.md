@@ -39,6 +39,12 @@ The actual actions taken are as follows:
 
 - We've rewritten the system manual in much greater detail. Author: Claude 4.5 Sonnet.  
   
+- We had GPT-5 Thinking evaluate the current system. Based on the evaluation results, Claude 4.5 Sonnet modified the system as follows:  
+  
+- Modified the system to correctly handle lists containing circular references. Author: Claude 4.5 Sonnet.  
+  
+- Improved the hash table library so that values ​​are not overwritten unless the keys are identical. Author: Claude 4.5 Sonnet.  
+  
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
 I have built and tested this on clang++ on Ubuntu-24.04 and FreeBSD 15.0-RELEASE, and g++ on Windows 11.  
