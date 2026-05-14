@@ -39,8 +39,6 @@ The actual actions taken are as follows:
   
 - GPT-5 Thinking evaluated the current system. Based on the results, Claude 4.5 Sonnet modified the system as follows.  
   
-- We had GPT-5 Thinking evaluate the current system. Based on the results, Claude 4.5 Sonnet modified the system.  
-  
 - Modified the system to correctly handle lists containing circular references. Author: Claude 4.5 Sonnet.  
   
 - Improved the hash table library so that values ​​are not overwritten unless the keys are identical. Author: Claude 4.5 Sonnet.  
