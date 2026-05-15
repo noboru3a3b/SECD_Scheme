@@ -42,6 +42,8 @@ The actual actions taken are as follows:
 - Modified the system to correctly handle lists containing circular references. Author: Claude 4.5 Sonnet.  
   
 - Improved the hash table library so that values ​​are not overwritten unless the keys are identical. Author: Claude 4.5 Sonnet.  
+
+- Speeded up LD/LSET instructions (reduced access time to O(1)) by vectorizing the environment frame. Author: Claude 4.5 Sonnet.  
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
