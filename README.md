@@ -187,6 +187,152 @@ If optimization is working, these should be faster
 than the previous list-based implementation.
 ===========================================
 NIL
-PS C:\Users\user\SECD_Scheme> 
+PS C:\Users\user\SECD_Scheme> .\scheme12_debug.exe
+scheme12 debug REPL. Type (help) for commands.
+scheme12> (trace-on)
+Trace mode ON
+
+==== Step 0 ====
+PC: 3
+Instruction: STOP
+Stack:
+  [0] TRUE
+Environment: (empty)
+Dump: 0 frame(s)
+TRUE
+scheme12> (let ((x 10) (y 20)) (+ x y))
+
+==== Step 0 ====
+PC: 0
+Instruction: LDC 10
+Stack: (empty)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 1 ====
+PC: 1
+Instruction: LDC 20
+Stack:
+  [0] 10
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 2 ====
+PC: 2
+Instruction: ARGS 2
+Stack:
+  [0] 20
+  [1] 10
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 3 ====
+PC: 3
+Instruction: LDF (x y)
+Stack:
+  [0] (10 20)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 4 ====
+PC: 4
+Instruction: APP
+Stack:
+  [0] #<closure:(x y)>
+  [1] (10 20)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 5 ====
+PC: 0
+Instruction: LD (0 . 0)
+Stack: (empty)
+Environment: 1 frame(s)
+  Frame[0]: Vector(2 bindings)
+Dump: 1 frame(s)
+
+==== Step 6 ====
+PC: 1
+Instruction: LD (0 . 1)
+Stack:
+  [0] 10
+Environment: 1 frame(s)
+  Frame[0]: Vector(2 bindings)
+Dump: 1 frame(s)
+
+==== Step 7 ====
+PC: 2
+Instruction: ARGS 2
+Stack:
+  [0] 20
+  [1] 10
+Environment: 1 frame(s)
+  Frame[0]: Vector(2 bindings)
+Dump: 1 frame(s)
+
+==== Step 8 ====
+PC: 3
+Instruction: LDG +
+Stack:
+  [0] (10 20)
+Environment: 1 frame(s)
+  Frame[0]: Vector(2 bindings)
+Dump: 1 frame(s)
+
+==== Step 9 ====
+PC: 4
+Instruction: TAPP
+Stack:
+  [0] (PRIMITIVE +)
+  [1] (10 20)
+Environment: 1 frame(s)
+  Frame[0]: Vector(2 bindings)
+Dump: 1 frame(s)
+
+==== Step 10 ====
+PC: 5
+Instruction: RTN
+Stack:
+  [0] 30
+Environment: 1 frame(s)
+  Frame[0]: Vector(2 bindings)
+Dump: 1 frame(s)
+
+==== Step 11 ====
+PC: 5
+Instruction: STOP
+Stack:
+  [0] 30
+Environment: (empty)
+Dump: 0 frame(s)
+30
+scheme12> (trace-off)
+
+==== Step 0 ====
+PC: 0
+Instruction: ARGS 0
+Stack: (empty)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 1 ====
+PC: 1
+Instruction: LDG trace-off
+Stack:
+  [0] NIL
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 2 ====
+PC: 2
+Instruction: APP
+Stack:
+  [0] (PRIMITIVE trace-off)
+  [1] NIL
+Environment: (empty)
+Dump: 0 frame(s)
+Trace mode OFF
+FALSE
+scheme12>
   
 ```
