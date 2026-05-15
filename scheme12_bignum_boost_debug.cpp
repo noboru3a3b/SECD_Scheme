@@ -3,6 +3,7 @@
 // Part 1
 #include <algorithm>
 #include <cctype>
+#include <climits>  // LLONG_MAX用に明示的に追加
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -203,10 +204,13 @@ struct PrimitiveInfo : public gc {
 
 using PrimitiveInfoPtr = PrimitiveInfo*;
 
+// 専用タグ（EOF用）
+struct EofTag {};
+
 struct Value : public gc {
     using Data = std::variant<NilTag, bool, BigIntPtr, std::string, Symbol, PairPtr, 
                              ClosurePtr, ContPtr, PrimitiveInfoPtr, FilePortPtr, VectorPtr, 
-                             MacroPtr, SpecialFormPtr>;
+                             MacroPtr, SpecialFormPtr, EofTag>;  // ← EofTag追加
     Data data;
     explicit Value(Data d) : data(std::move(d)) {}
 };
@@ -237,8 +241,7 @@ static ValuePtr g_nil = nullptr;
 static StringValueMap g_globals;
 static StringValueMap g_macros;
 static StringValueMap g_symbol_intern;
-static bool g_trace_mode = false;  // トレースモード
-// 乱数生成器
+static bool g_trace_mode = false;
 static std::mt19937 g_random_engine;
 static bool g_random_initialized = false;
 
@@ -316,6 +319,15 @@ static ValuePtr make_vector_value(const ValueVec& elems) {
 static ValuePtr make_special_form(const std::string& name) {
     SpecialFormPtr sf = new SpecialForm(name);
     return make_value(sf);
+}
+
+// EOF専用オブジェクト生成
+static ValuePtr make_eof_object() {
+    static ValuePtr eof_obj = nullptr;
+    if (!eof_obj) {
+        eof_obj = make_value(EofTag{});
+    }
+    return eof_obj;
 }
 
 static bool is_vector(const ValuePtr& v) {
@@ -460,7 +472,7 @@ static std::string code_to_string(CodePtr code, int indent = 0) {
     return oss.str();
 }
 
-// 詳細表示用（分岐先も含む）- disassemble専用
+// 詳細表示用
 static std::string instruction_to_string_detailed(const Instruction& ins, int indent = 0, int max_depth = 10);
 static std::string code_to_string_detailed(CodePtr code, int indent = 0, int max_depth = 10);
 
@@ -661,6 +673,8 @@ static std::string to_string(const ValuePtr& v) {
         return port->is_input ? "#<input-port>" : "#<output-port>";
     }
     
+    if (std::holds_alternative<EofTag>(v->data)) return "#<eof>";
+    
     if (std::holds_alternative<VectorPtr>(v->data)) {
         VectorPtr vec = std::get<VectorPtr>(v->data);
         std::ostringstream oss;
@@ -676,7 +690,7 @@ static std::string to_string(const ValuePtr& v) {
     return "#<unknown>";
 }
 
-// Reader (変更なし)
+// Reader（角括弧サポート削除版）
 struct Reader {
     explicit Reader(std::string src) : s(std::move(src)) {}
     std::string s;
@@ -1411,9 +1425,13 @@ struct VM {
                 ValuePtr frame = e[i];
                 if (is_nil(frame)) {
                     std::cout << "NIL\n";
+                } else if (is_vector(frame)) {
+                    // 改善：ベクタフレームの表示
+                    VectorPtr vec = as_vector(frame);
+                    std::cout << "Vector(" << vec->size() << " bindings)\n";
                 } else if (is_pair(frame)) {
                     auto fvec = vector_from_list(frame);
-                    std::cout << fvec.size() << " binding(s)\n";
+                    std::cout << "List(" << fvec.size() << " bindings)\n";
                 } else {
                     std::cout << to_string(frame) << "\n";
                 }
@@ -1440,9 +1458,18 @@ struct VM {
                     std::size_t idx = static_cast<std::size_t>(ins.b);
                     if (pos >= e.size()) vm_error("LD frame out of range");
                     ValuePtr frame = e[pos];
-                    auto frame_vec = vector_from_list(frame);
-                    if (idx >= frame_vec.size()) vm_error("LD index out of range");
-                    s.push_back(frame_vec[idx]);
+                    
+                    // 改善：フレームがベクタなら直接アクセス、リストなら変換
+                    if (is_vector(frame)) {
+                        VectorPtr vec = as_vector(frame);
+                        if (idx >= vec->size()) vm_error("LD index out of range");
+                        s.push_back(vec->at(idx));
+                    } else {
+                        // 後方互換：リスト形式もサポート
+                        auto frame_vec = vector_from_list(frame);
+                        if (idx >= frame_vec.size()) vm_error("LD index out of range");
+                        s.push_back(frame_vec[idx]);
+                    }
                     break;
                 }
                 case Op::LDC:
@@ -1540,7 +1567,8 @@ struct VM {
                     
                     s.clear();
                     ValueVec new_e;
-                    new_e.push_back(list_from_vector(frame));
+                    // 改善：フレームをベクタとして保持
+                    new_e.push_back(make_vector_value(frame));
                     new_e.insert(new_e.end(), clo->captured_env.begin(), 
                                 clo->captured_env.end());
                     e = new_e;
@@ -1611,13 +1639,23 @@ struct VM {
                     std::size_t pos = static_cast<std::size_t>(ins.a);
                     std::size_t idx = static_cast<std::size_t>(ins.b);
                     if (pos >= e.size()) vm_error("LSET frame out of range");
-                    ValuePtr cell = e[pos];
-                    for (std::size_t i = 0; i < idx; ++i) {
+                    ValuePtr frame = e[pos];
+                    
+                    // 改善：フレームがベクタなら直接アクセス
+                    if (is_vector(frame)) {
+                        VectorPtr vec = as_vector(frame);
+                        if (idx >= vec->size()) vm_error("LSET index out of range");
+                        vec->at(idx) = s.back();
+                    } else {
+                        // 後方互換：リスト形式
+                        ValuePtr cell = frame;
+                        for (std::size_t i = 0; i < idx; ++i) {
+                            if (!is_pair(cell)) vm_error("LSET index out of range");
+                            cell = cdr(cell);
+                        }
                         if (!is_pair(cell)) vm_error("LSET index out of range");
-                        cell = cdr(cell);
+                        as_pair(cell)->car = s.back();
                     }
-                    if (!is_pair(cell)) vm_error("LSET index out of range");
-                    as_pair(cell)->car = s.back();
                     break;
                 }
                 case Op::GSET:
@@ -1666,7 +1704,8 @@ struct VM {
                     d.push_back(DumpFrame{s, e, c, pc});
                     s.clear();
                     ValueVec new_e;
-                    new_e.push_back(list_from_vector(frame));
+                    // 改善：フレームをベクタとして保持
+                    new_e.push_back(make_vector_value(frame));
                     new_e.insert(new_e.end(), clo->captured_env.begin(), 
                                 clo->captured_env.end());
                     e = new_e;
@@ -1720,7 +1759,8 @@ static ValuePtr apply_callable_raw(ValuePtr proc, const ValueVec& args) {
     VM vm;
     vm.s.clear();
     vm.e.clear();
-    vm.e.push_back(list_from_vector(frame));
+    // 改善：フレームをベクタとして保持
+    vm.e.push_back(make_vector_value(frame));
     vm.e.insert(vm.e.end(), clo->captured_env.begin(), clo->captured_env.end());
     vm.c = clo->body;
     vm.pc = 0;
@@ -1761,12 +1801,12 @@ static ValuePtr prim_mul(const ValueVec& args) {
 }
 
 static ValuePtr prim_div(const ValueVec& args) {
-    if (args.empty()) vm_error("/ expects at least 1 arg");
-    BigInt n = as_int(args[0]);
-    if (args.size() == 1) {
-        if (n.is_zero()) vm_error("division by zero");
-        return make_int(BigInt(1) / n);
+    // 修正：1引数の除算を禁止
+    if (args.size() < 2) {
+        vm_error("/ requires at least 2 arguments (1-argument division is not supported)");
     }
+    
+    BigInt n = as_int(args[0]);
     for (std::size_t i = 1; i < args.size(); ++i) {
         BigInt& d = as_int(args[i]);
         if (d.is_zero()) vm_error("division by zero");
@@ -2220,15 +2260,7 @@ static ValuePtr prim_newline(const ValueVec& args) {
     return g_nil;
 }
 
-// File I/O primitives (以前のコードと同じ)
-static ValuePtr make_eof_object() {
-    static ValuePtr eof_sym = nullptr;
-    if (!eof_sym) {
-        eof_sym = make_symbol(":eof");
-    }
-    return eof_sym;
-}
-
+// File I/O primitives
 static ValuePtr prim_open_input_file(const ValueVec& args) {
     if (args.size() != 1 || !std::holds_alternative<std::string>(args[0]->data)) {
         vm_error("open-input-file expects a string path");
@@ -2318,11 +2350,10 @@ static ValuePtr prim_write_newline(const ValueVec& args) {
     return g_nil;
 }
 
+// 判定関数
 static ValuePtr prim_eof_objectp(const ValueVec& args) {
-    if (args.size() != 1) {
-        vm_error("eof-object? expects 1 arg");
-    }
-    return make_bool(is_symbol(args[0], ":eof"));
+    if (args.size() != 1) vm_error("eof-object? expects 1 arg");
+    return make_bool(args[0] && std::holds_alternative<EofTag>(args[0]->data));
 }
 
 static ValuePtr prim_read_char(const ValueVec& args) {
@@ -2412,10 +2443,11 @@ static ValuePtr prim_read_expr(const ValueVec& args) {
         }
         
         if (!in_string) {
-            if (ch == '(' || ch == '[') {
+            // 修正：角括弧を削除（丸括弧のみ）
+            if (ch == '(') {
                 paren_depth++;
                 seen_content = true;
-            } else if (ch == ')' || ch == ']') {
+            } else if (ch == ')') {
                 paren_depth--;
             } else if (!std::isspace(static_cast<unsigned char>(ch))) {
                 seen_content = true;
@@ -3009,6 +3041,13 @@ static ValuePtr prim_help(const ValueVec& args) {
     std::cout << R"(
 === scheme12 Debug Commands ===
 
+NOTE: This implementation notes:
+  - (/ x) single-argument division is NOT supported (use (/ 1 x) or avoid)
+  - eq? and eqv? both perform value comparison on numbers
+  - Square brackets [] are NOT supported (use parentheses only)
+  - Characters are represented as length-1 strings
+  - EOF is a dedicated object type (not a symbol)
+
 Basic evaluation:
   expr                    Evaluate expression
 
@@ -3115,6 +3154,11 @@ static void init_globals() {
     g_globals["append"] = make_prim("append", prim_append);
     
     // Predicates
+    // NOTE: This implementation's eq? and eqv? both perform value comparison
+    // for numbers (not pointer identity). This differs from strict R5RS where
+    // eq? on numbers is implementation-dependent (often false for different
+    // number objects with same value). For symbol equality, both use name
+    // comparison which is standard.
     g_globals["eq?"] = make_prim("eq?", prim_eq);
     g_globals["eqv?"] = make_prim("eqv?", prim_eqv);
     g_globals["equal?"] = make_prim("equal?", prim_equal);
@@ -3239,9 +3283,11 @@ static bool is_balanced(const std::string& s) {
             continue;
         }
         if (in_string) continue;
-        if (c == '(' || c == '[') {
+        
+        // 修正：角括弧を削除（丸括弧のみ）
+        if (c == '(') {
             ++paren_count;
-        } else if (c == ')' || c == ']') {
+        } else if (c == ')') {
             --paren_count;
             if (paren_count < 0) return false;
         }
