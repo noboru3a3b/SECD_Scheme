@@ -4,8 +4,8 @@
 ;;; Fixed version: Uses chaining to handle hash collisions correctly
 ;;;
 
-;;; Load the red-black tree library
-;; (load "rbtree_lib_improved.scm")
+;;; Load the red-black tree library (明示的に有効化)
+(load "rbtree_lib_improved.scm")
 
 ;;;============================================================================
 ;;; Hash Function Implementation

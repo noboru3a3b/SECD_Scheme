@@ -238,6 +238,8 @@ struct Code : public gc {
 };
 
 static ValuePtr g_nil = nullptr;
+static ValuePtr g_true = nullptr;   // 追加
+static ValuePtr g_false = nullptr;  // 追加
 static StringValueMap g_globals;
 static StringValueMap g_macros;
 static StringValueMap g_symbol_intern;
@@ -251,7 +253,16 @@ static bool g_random_initialized = false;
 
 static ValuePtr make_value(Value::Data d) { return new Value(std::move(d)); }
 static CodePtr make_code() { return new Code(); }
-static ValuePtr make_bool(bool b) { return make_value(b); }
+
+static ValuePtr make_bool(bool b) { 
+    if (b) {
+        if (!g_true) g_true = make_value(true);
+        return g_true;
+    } else {
+        if (!g_false) g_false = make_value(false);
+        return g_false;
+    }
+}
 
 static ValuePtr make_int(const BigInt& n) {
     BigIntPtr p = new BigInt(n);
@@ -322,12 +333,13 @@ static ValuePtr make_special_form(const std::string& name) {
 }
 
 // EOF専用オブジェクト生成
+static ValuePtr g_eof = nullptr;  // グローバル変数として追加
+
 static ValuePtr make_eof_object() {
-    static ValuePtr eof_obj = nullptr;
-    if (!eof_obj) {
-        eof_obj = make_value(EofTag{});
+    if (!g_eof) {
+        g_eof = make_value(EofTag{});
     }
-    return eof_obj;
+    return g_eof;
 }
 
 static bool is_vector(const ValuePtr& v) {
@@ -621,7 +633,34 @@ static std::string list_to_string(ValuePtr ls) {
     return list_to_string_with_visited(ls, visited);
 }
 
-static std::string to_string(const ValuePtr& v) {
+// 循環検出付きto_string（内部用）
+static std::string to_string_with_visited(const ValuePtr& v, 
+                                          std::unordered_set<void*>& visited);
+
+static std::string vector_to_string_with_visited(VectorPtr vec,
+                                                 std::unordered_set<void*>& visited) {
+    void* addr = static_cast<void*>(vec);
+    
+    // 循環検出
+    if (visited.count(addr)) {
+        return "#<circular-vector>";
+    }
+    visited.insert(addr);
+    
+    std::ostringstream oss;
+    oss << "#(";
+    for (std::size_t i = 0; i < vec->size(); ++i) {
+        if (i > 0) oss << " ";
+        oss << to_string_with_visited(vec->at(i), visited);
+    }
+    oss << ")";
+    
+    visited.erase(addr);  // バックトラック
+    return oss.str();
+}
+
+static std::string to_string_with_visited(const ValuePtr& v, 
+                                          std::unordered_set<void*>& visited) {
     if (is_nil(v)) return "NIL";
     if (std::holds_alternative<bool>(v->data)) 
         return std::get<bool>(v->data) ? "TRUE" : "FALSE";
@@ -632,7 +671,7 @@ static std::string to_string(const ValuePtr& v) {
     if (std::holds_alternative<Symbol>(v->data)) 
         return std::get<Symbol>(v->data).name;
     if (std::holds_alternative<PairPtr>(v->data)) 
-        return list_to_string(v);
+        return list_to_string_with_visited(v, visited);
     
     if (std::holds_alternative<ClosurePtr>(v->data)) {
         ClosurePtr clo = std::get<ClosurePtr>(v->data);
@@ -676,18 +715,15 @@ static std::string to_string(const ValuePtr& v) {
     if (std::holds_alternative<EofTag>(v->data)) return "#<eof>";
     
     if (std::holds_alternative<VectorPtr>(v->data)) {
-        VectorPtr vec = std::get<VectorPtr>(v->data);
-        std::ostringstream oss;
-        oss << "#(";
-        for (std::size_t i = 0; i < vec->size(); ++i) {
-            if (i > 0) oss << " ";
-            oss << to_string(vec->at(i));
-        }
-        oss << ")";
-        return oss.str();
+        return vector_to_string_with_visited(std::get<VectorPtr>(v->data), visited);
     }
     
     return "#<unknown>";
+}
+
+static std::string to_string(const ValuePtr& v) {
+    std::unordered_set<void*> visited;
+    return to_string_with_visited(v, visited);
 }
 
 // Reader（角括弧サポート削除版）
@@ -730,12 +766,22 @@ struct Reader {
         char c = get();
         
         if (c == '#') {
-            if (peek() == '(') {
+            char next = peek();
+            if (next == '(') {
                 get();
-                return read_vector();
+                    return read_vector();
             }
-            --p;
-            return read_atom('#');
+            // #t と #f を直接処理（read_atom を呼ばない）
+            if (next == 't' || next == 'T') {
+                get();  // 't' を消費
+                return make_bool(true);
+            }
+            if (next == 'f' || next == 'F') {
+                get();  // 'f' を消費
+                return make_bool(false);
+            }
+            // その他の # で始まるトークン（将来の拡張用）
+            return read_atom(c);
         }
         
         if (c == '(') return read_list();
@@ -824,10 +870,13 @@ struct Reader {
             tok.push_back(c);
             ++p;
         }
+        
+        // 真偽値の特別扱い（#t/#fはread_exprで処理されるのでここには来ない）
         if (tok == "nil") return g_nil;
         if (tok == "true") return make_bool(true);
         if (tok == "false") return make_bool(false);
         
+        // 数値判定
         bool is_num = !tok.empty() && (std::isdigit(static_cast<unsigned char>(tok[0])) || 
                                        ((tok[0] == '-' || tok[0] == '+') && tok.size() > 1));
         if (is_num) {
@@ -1377,12 +1426,26 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
 // Part 3: VM with trace support
 
 #ifdef HAS_BIGNUM
-static long long bigint_to_ll(const BigInt& n) {
-    std::string s = n.to_string();
-    return std::stoll(s);
+static long long safe_bigint_to_ll(const BigInt& n, const char* context) {
+    // 範囲チェック
+    if (n.value > BigIntType(LLONG_MAX) || n.value < BigIntType(LLONG_MIN)) {
+        std::string msg = std::string(context) + ": integer out of range for conversion";
+        vm_error(msg);
+    }
+    
+    try {
+        std::string s = n.to_string();
+        return std::stoll(s);
+    } catch (const std::exception& e) {
+        std::string msg = std::string(context) + ": conversion error - " + e.what();
+        vm_error(msg);
+    }
 }
 #else
-static long long bigint_to_ll(const BigInt& n) {
+static long long safe_bigint_to_ll(const BigInt& n, const char* context) {
+    // Boost未使用時はlong longなのでそのまま返す
+    // ただしオーバーフロー検出は困難
+    (void)context;
     return n.value;
 }
 #endif
@@ -1801,9 +1864,8 @@ static ValuePtr prim_mul(const ValueVec& args) {
 }
 
 static ValuePtr prim_div(const ValueVec& args) {
-    // 修正：1引数の除算を禁止
     if (args.size() < 2) {
-        vm_error("/ requires at least 2 arguments (1-argument division is not supported)");
+        vm_error("/ requires at least 2 arguments (single-argument reciprocal is not supported; use (/ 1 x) instead)");
     }
     
     BigInt n = as_int(args[0]);
@@ -2004,12 +2066,19 @@ static bool is_proper_list(ValuePtr v) {
 }
 
 // 循環検出付きequal?実装
-static bool value_equal_with_visited(ValuePtr a, ValuePtr b, 
-                                     std::unordered_set<void*>& visited_a,
-                                     std::unordered_set<void*>& visited_b) {
+// ノード対応を記録する構造
+using VisitedMap = std::unordered_map<void*, void*, 
+    std::hash<void*>, std::equal_to<void*>,
+    traceable_allocator<std::pair<void* const, void*>>>;
+
+static bool value_equal_with_visited(ValuePtr a, ValuePtr b, VisitedMap& visited) {
+    // 同一オブジェクトなら等しい
     if (a == b) return true;
+    
+    // どちらかがNILなら、両方NILの場合のみ等しい
     if (is_nil(a) || is_nil(b)) return is_nil(a) && is_nil(b);
     
+    // 型が異なる場合の基本比較
     if (std::holds_alternative<bool>(a->data) && std::holds_alternative<bool>(b->data)) {
         return std::get<bool>(a->data) == std::get<bool>(b->data);
     }
@@ -2025,46 +2094,67 @@ static bool value_equal_with_visited(ValuePtr a, ValuePtr b,
         return std::get<Symbol>(a->data).name == std::get<Symbol>(b->data).name;
     }
     
-    // ベクタの比較を追加
+    // ベクタの比較（循環検出付き）
     if (std::holds_alternative<VectorPtr>(a->data) && 
         std::holds_alternative<VectorPtr>(b->data)) {
         VectorPtr va = std::get<VectorPtr>(a->data);
         VectorPtr vb = std::get<VectorPtr>(b->data);
-        if (va->size() != vb->size()) return false;
-        for (std::size_t i = 0; i < va->size(); ++i) {
-            if (!value_equal_with_visited(va->at(i), vb->at(i), visited_a, visited_b))
-                return false;
+        
+        void* addr_a = static_cast<void*>(va);
+        void* addr_b = static_cast<void*>(vb);
+        
+        // 既に訪問済みか確認
+        auto it = visited.find(addr_a);
+        if (it != visited.end()) {
+            // 対応関係が一致するか確認
+            return it->second == addr_b;
         }
+        
+        // サイズチェック
+        if (va->size() != vb->size()) return false;
+        
+        // 訪問記録
+        visited[addr_a] = addr_b;
+        
+        // 各要素を再帰比較
+        for (std::size_t i = 0; i < va->size(); ++i) {
+            if (!value_equal_with_visited(va->at(i), vb->at(i), visited)) {
+                visited.erase(addr_a);  // バックトラック
+                return false;
+            }
+        }
+        
+        visited.erase(addr_a);  // バックトラック
         return true;
     }
     
-    // ペアの比較（循環検出付き）
+    // ペアの比較（循環検出付き・対応関係記録）
     if (std::holds_alternative<PairPtr>(a->data) && 
         std::holds_alternative<PairPtr>(b->data)) {
         PairPtr pa = std::get<PairPtr>(a->data);
         PairPtr pb = std::get<PairPtr>(b->data);
         
-        // 循環検出：このペアを既に訪問済みか？
         void* addr_a = static_cast<void*>(pa);
         void* addr_b = static_cast<void*>(pb);
         
-        if (visited_a.count(addr_a) || visited_b.count(addr_b)) {
-            // 循環検出：両方とも訪問済みなら構造的に等しいと仮定
-            return visited_a.count(addr_a) && visited_b.count(addr_b);
+        // 既に訪問済みか確認
+        auto it = visited.find(addr_a);
+        if (it != visited.end()) {
+            // 対応関係が一致するか確認
+            return it->second == addr_b;
         }
         
         // 訪問記録
-        visited_a.insert(addr_a);
-        visited_b.insert(addr_b);
+        visited[addr_a] = addr_b;
         
-        // carとcdrを再帰的に比較
-        bool car_equal = value_equal_with_visited(car(a), car(b), visited_a, visited_b);
-        bool cdr_equal = value_equal_with_visited(cdr(a), cdr(b), visited_a, visited_b);
+        // carとcdrを再帰比較
+        bool car_equal = value_equal_with_visited(car(a), car(b), visited);
+        bool cdr_equal = false;
+        if (car_equal) {
+            cdr_equal = value_equal_with_visited(cdr(a), cdr(b), visited);
+        }
         
-        // 訪問記録をクリーンアップ（バックトラック）
-        visited_a.erase(addr_a);
-        visited_b.erase(addr_b);
-        
+        visited.erase(addr_a);  // バックトラック
         return car_equal && cdr_equal;
     }
     
@@ -2072,9 +2162,8 @@ static bool value_equal_with_visited(ValuePtr a, ValuePtr b,
 }
 
 static bool value_equal(ValuePtr a, ValuePtr b) {
-    std::unordered_set<void*> visited_a;
-    std::unordered_set<void*> visited_b;
-    return value_equal_with_visited(a, b, visited_a, visited_b);
+    VisitedMap visited;
+    return value_equal_with_visited(a, b, visited);
 }
 
 static ValuePtr prim_equal(const ValueVec& args) {
@@ -2510,8 +2599,8 @@ static ValuePtr prim_make_string(const ValueVec& args) {
     BigInt& len = as_int(args[0]);
     if (len < BigInt(0)) vm_error("make-string: negative length");
     
-    long long len_val = bigint_to_ll(len);
-    if (len_val < 0 || len_val > 1000000) vm_error("make-string: invalid length");
+    long long len_val = safe_bigint_to_ll(len, "make-string");
+    if (len_val < 0 || len_val > 1000000) vm_error("make-string: length out of reasonable range");
     std::size_t n = static_cast<std::size_t>(len_val);
     
     char fill_char = ' ';
@@ -2534,7 +2623,7 @@ static ValuePtr prim_string_ref(const ValueVec& args) {
     std::string& s = as_string(args[0]);
     BigInt& idx = as_int(args[1]);
     
-    long long i = bigint_to_ll(idx);
+    long long i = safe_bigint_to_ll(idx, "string-ref");  // 修正
     if (i < 0 || static_cast<std::size_t>(i) >= s.size()) {
         vm_error("string-ref: index out of range");
     }
@@ -2550,7 +2639,7 @@ static ValuePtr prim_string_set(const ValueVec& args) {
     
     if (newchar.empty()) vm_error("string-set!: empty char string");
     
-    long long i = bigint_to_ll(idx);
+    long long i = safe_bigint_to_ll(idx, "string-set!");  // 修正
     if (i < 0 || static_cast<std::size_t>(i) >= s.size()) {
         vm_error("string-set!: index out of range");
     }
@@ -2564,7 +2653,7 @@ static ValuePtr prim_substring(const ValueVec& args) {
     std::string& s = as_string(args[0]);
     BigInt& start = as_int(args[1]);
     
-    long long start_val = bigint_to_ll(start);
+    long long start_val = safe_bigint_to_ll(start, "substring");  // 修正
     if (start_val < 0 || start_val > static_cast<long long>(s.size())) {
         vm_error("substring: start index out of range");
     }
@@ -2573,7 +2662,7 @@ static ValuePtr prim_substring(const ValueVec& args) {
     
     if (args.size() == 3) {
         BigInt& end = as_int(args[2]);
-        long long end_val = bigint_to_ll(end);
+        long long end_val = safe_bigint_to_ll(end, "substring");  // 修正
         if (end_val < start_val || end_val > static_cast<long long>(s.size())) {
             vm_error("substring: end index out of range");
         }
@@ -2663,7 +2752,7 @@ static ValuePtr prim_char_to_integer(const ValueVec& args) {
 static ValuePtr prim_integer_to_char(const ValueVec& args) {
     if (args.size() != 1) vm_error("integer->char expects 1 arg");
     BigInt& n = as_int(args[0]);
-    long long val = bigint_to_ll(n);
+    long long val = safe_bigint_to_ll(n, "integer->char");  // 修正
     if (val < 0 || val > 127) vm_error("integer->char: value out of ASCII range");
     return make_string(std::string(1, static_cast<char>(val)));
 }
@@ -2679,7 +2768,7 @@ static ValuePtr prim_make_vector(const ValueVec& args) {
     BigInt& len = as_int(args[0]);
     if (len < BigInt(0)) vm_error("make-vector: negative length");
     
-    long long len_val = bigint_to_ll(len);
+    long long len_val = safe_bigint_to_ll(len, "make-vector");  // 修正
     if (len_val < 0 || len_val > 1000000) vm_error("make-vector: length too large");
     std::size_t n = static_cast<std::size_t>(len_val);
     
@@ -2702,7 +2791,7 @@ static ValuePtr prim_vector_ref(const ValueVec& args) {
     VectorPtr vec = as_vector(args[0]);
     BigInt& idx = as_int(args[1]);
     
-    long long i = bigint_to_ll(idx);
+    long long i = safe_bigint_to_ll(idx, "vector-ref");  // 修正
     if (i < 0 || static_cast<std::size_t>(i) >= vec->size()) {
         vm_error("vector-ref: index out of range");
     }
@@ -2715,7 +2804,7 @@ static ValuePtr prim_vector_set(const ValueVec& args) {
     BigInt& idx = as_int(args[1]);
     ValuePtr val = args[2];
     
-    long long i = bigint_to_ll(idx);
+    long long i = safe_bigint_to_ll(idx, "vector-set!");  // 修正
     if (i < 0 || static_cast<std::size_t>(i) >= vec->size()) {
         vm_error("vector-set!: index out of range");
     }
@@ -2871,11 +2960,15 @@ static ValuePtr prim_random(const ValueVec& args) {
         vm_error("random: argument must be positive");
     }
     
-    // Convert to long long for distribution
-    long long max_val = bigint_to_ll(n);
-    if (max_val <= 0 || max_val > LLONG_MAX) {
-        vm_error("random: argument out of range");
+    // 範囲チェック（変換前に行う）
+#ifdef HAS_BIGNUM
+    if (n.value > BigIntType(LLONG_MAX)) {
+        vm_error("random: argument too large (must fit in long long range)");
     }
+#endif
+    
+    // 安全に変換
+    long long max_val = safe_bigint_to_ll(n, "random");
     
     std::uniform_int_distribution<long long> dist(0, max_val - 1);
     long long result = dist(g_random_engine);
@@ -2888,7 +2981,7 @@ static ValuePtr prim_random_seed(const ValueVec& args) {
     }
     
     BigInt& seed = as_int(args[0]);
-    long long seed_val = bigint_to_ll(seed);
+    long long seed_val = safe_bigint_to_ll(seed, "random-seed");  // 修正
     
     g_random_engine.seed(static_cast<unsigned int>(seed_val));
     g_random_initialized = true;
@@ -3093,18 +3186,26 @@ static ValuePtr prim_gensym(const ValueVec& args) {
 
 static void init_globals() {
     g_nil = make_value(NilTag{});
+    
+    // シングルトン作成（make_bool内で作られるが明示的に初期化）
+    g_true = make_bool(true);
+    g_false = make_bool(false);
+    g_eof = make_eof_object();  // ← 追加
+    
     g_globals.clear();
     g_macros.clear();
     g_symbol_intern.clear();
     
-    g_globals["true"] = make_bool(true);
-    g_globals["false"] = make_bool(false);
+    // シングルトンを使用
+    g_globals["true"] = g_true;
+    g_globals["false"] = g_false;
     g_globals["nil"] = g_nil;
-    g_globals["TRUE"] = g_globals["true"];
-    g_globals["FALSE"] = g_globals["false"];
-    g_globals["NIL"] = g_globals["nil"];
-    g_globals["T"] = g_globals["true"];
+    g_globals["TRUE"] = g_true;
+    g_globals["FALSE"] = g_false;
+    g_globals["NIL"] = g_nil;
+    g_globals["T"] = g_true;
     g_globals[":undef"] = make_symbol(":undef");
+    g_globals["eof-object"] = g_eof;
     
     // Special forms
     g_globals["quote"] = make_special_form("quote");
