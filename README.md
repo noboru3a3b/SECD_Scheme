@@ -45,7 +45,7 @@ The actual actions taken are as follows:
 
 - Speeded up LD/LSET instructions (reduced access time to O(1)) by vectorizing the environment frame. Author: Claude 4.5 Sonnet.  
 
-- We've made several improvements, so I've updated the system manual. Author: Claude 4.5 Sonnet.
+- We've made several improvements, so We've updated the system manual. Author: Claude 4.5 Sonnet.
    
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
