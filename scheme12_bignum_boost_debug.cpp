@@ -3027,7 +3027,7 @@ static ValuePtr prim_compile(const ValueVec& args) {
     if (args.size() != 1) vm_error("compile expects 1 arg");
     CodePtr code = compile_top(args[0]);
     std::cout << "\n=== Compiled Code ===\n";
-    std::cout << code_to_string(code, 0);
+    std::cout << code_to_string_detailed(code, 0, 10);  // ← 変更
     std::cout << "=====================\n";
     return make_symbol(":compiled");
 }
