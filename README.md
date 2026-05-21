@@ -97,100 +97,30 @@ PS C:\Users\user\SECD_Scheme> make clean
 rm -f scheme12_debug scheme12_debug.exe libgc-1.dll libgccpp-1.dll
 PS C:\Users\user\SECD_Scheme> make
 g++ -std=c++17 -Wall -Wextra -O2 -Wno-unused-function -Igc-8.2.12/include -IC:/boost_1_91_0 -o scheme12_debug scheme12_bignum_boost_debug.cpp -Lgc-8.2.12/.libs -lgc -lgccpp
-PS C:\Users\user\SECD_Scheme> .\scheme12_debug.exe --load test_vector_env.scm
-===========================================
-  Environment Frame Vectorization Test (Fixed)
-===========================================
-
-
---- Test 1: Basic variable reference (LD) ---
-[PASS] Simple let with 3 variables
-[PASS] Nested let (3 levels)
-
---- Test 2: Variable assignment (LSET) ---
-[PASS] Simple set!
-[PASS] set! in multi-variable let
-[PASS] set! in nested environment
-
---- Test 3: Large frame (many variables) ---
-[PASS] 10 variables in frame
-[PASS] set! in large frame
-
---- Test 4: Deep nesting ---
-[PASS] 5-level nested let
-[PASS] set! in deeply nested environment
-
---- Test 5: Closures and captured environment ---
-[PASS] Counter 1 - first call
-[PASS] Counter 1 - second call
-[PASS] Counter 2 - first call
-[PASS] Counter 1 - third call
-[PASS] Counter 2 - second call
-
---- Test 6: Complex environment manipulation ---
-[PASS] Closures with modified environment
-
---- Test 7: letrec (mutual recursion) ---
-[PASS] letrec even? 10
-[PASS] letrec odd? 10
-
---- Test 8: Recursive function (deep calls) ---
-[PASS] Factorial 5
-[PASS] Factorial 10
-
---- Test 9: Higher-order functions ---
-[PASS] map with closure
-[PASS] fold-left
-
---- Test 10: Performance test ---
-Computing sum of 0..999...
-[PASS] sum-range 1000
-Computing sum of 0..9999...
-[PASS] sum-range 10000
-
---- Test 11: let* behavior ---
-[PASS] let* sequential binding
-
---- Test 12: Variable-length arguments ---
-[PASS] varargs with 3 args
-[PASS] varargs sum
-
---- Test 13: Vector environment verification ---
-[PASS] Vector environment - repeated access
-
-===========================================
-  Test Summary
-===========================================
-Total tests:  27
-Passed:       27
-Failed:       0
-
-*** ALL TESTS PASSED ***
-- Environment frame vectorization is working correctly!
-- O(1) variable access and assignment confirmed!
-
-===========================================
-NIL
-PS C:\Users\user\SECD_Scheme> .\scheme12_debug.exe --load performance_test.scm
-===========================================
-  Performance Test: Vector Environment
-===========================================
-
-Running: Many variables access (1000 iterations)...
-  Completed
-Running: Fibonacci 15 (10 iterations)...
-  Completed
-Running: Multiple set! (10000 iterations)...
-  Completed
-
-===========================================
-Performance test completed!
-If optimization is working, these should be faster
-than the previous list-based implementation.
-===========================================
-NIL
-PS C:\Users\user\SECD_Scheme> .\scheme12_debug.exe
+C:\Users\user\SECD_Scheme>scheme12_debug.exe
 scheme12 debug REPL. Type (help) for commands.
+scheme12> (let ((x 10) (y 20)) (+ x y))
+30
+scheme12> (compile '(let ((x 10) (y 20)) (+ x y)))
+
+=== Compiled Code ===
+
+[  0] LDC 10
+[  1] LDC 20
+[  2] ARGS 2
+[  3] LDF (x y)
+  Lambda body:
+    [  0] LD (0 . 0)
+    [  1] LD (0 . 1)
+    [  2] ARGS 2
+    [  3] LDG +
+    [  4] TAPP
+    [  5] RTN
+
+[  4] APP
+[  5] STOP
+=====================
+:compiled
 scheme12> (trace-on)
 Trace mode ON
 
@@ -336,5 +266,4 @@ Dump: 0 frame(s)
 Trace mode OFF
 FALSE
 scheme12>
-  
 ```
