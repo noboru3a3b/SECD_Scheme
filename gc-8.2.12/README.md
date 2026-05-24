@@ -1,6 +1,6 @@
 ## (For Windows)
 ## Download and extract gc-8.2.12.tar.gz to this location.
-## Setting up Boehm GC using the 64devkit shell
+### Setting up Boehm GC using the 64devkit shell
 ### Launching the w64devkit bash
 ```bash
 1. Run w64devkit.exe (double-click)
@@ -25,6 +25,14 @@ make install
 ```bash
 sudo -s
 apt install libgc-dev
+exit
+```
+
+## (For FreeBSD)
+### Execute the following.
+```bash
+su
+pkg install devel/boehm-gc
 exit
 ```
 
