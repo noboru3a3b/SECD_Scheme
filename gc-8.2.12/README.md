@@ -7,7 +7,7 @@ Or
 C:\w64devkit\w64devkit.exe
 
 2. Once the bash shell starts, run the following:
-cd /c/Users/user/SECD_Scheme/gc-8.2.12
+cd c:/Users/user/SECD_Scheme/gc-8.2.12
 
 3. Run configure
 ./configure --prefix=/c/w64devkit/x86_64-w64-mingw32 \
