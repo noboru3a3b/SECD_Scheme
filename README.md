@@ -66,6 +66,7 @@ Selected GCC installation: /usr/bin/../lib/gcc/x86_64-linux-gnu/14
 Candidate multilib: .;@m64  
 Selected multilib: .;@m64  
 ```
+
 Compiler on FreeBSD:  
 ```
 > clang++ -v  
@@ -74,6 +75,7 @@ Target: x86_64-unknown-freebsd15.0
 Thread model: posix  
 InstalledDir: /.bastille/usr/bin  
 ```
+
 Compiler on NetBSD:  
 ```
 > /usr/pkg/gcc13/bin/g++ -v
@@ -86,6 +88,7 @@ Thread model: posix
 Supported LTO compression algorithms: zlib
 gcc version 13.3.0 (GCC)  
 ```
+
 Compiler on Windows 11:  
 ```
 > g++ -v  
