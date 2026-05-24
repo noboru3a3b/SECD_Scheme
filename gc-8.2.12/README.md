@@ -19,3 +19,12 @@ cd c:/Users/user/SECD_Scheme/gc-8.2.12
 make 
 make install
 ```
+
+## (For Linux)
+### Execute the following.
+```bash
+sudo -s
+apt install libgc-dev
+exit
+```
+
