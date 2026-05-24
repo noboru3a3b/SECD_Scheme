@@ -74,6 +74,18 @@ Target: x86_64-unknown-freebsd15.0
 Thread model: posix  
 InstalledDir: /.bastille/usr/bin  
 ```
+Compiler on NetBSD:  
+```
+> /usr/pkg/gcc13/bin/g++ -v
+Using built-in specs.
+COLLECT_GCC=/usr/pkg/gcc13/bin/g++
+COLLECT_LTO_WRAPPER=/usr/pkg/gcc13/libexec/gcc/i486--netbsdelf/13.3.0/lto-wrapper
+Target: i486--netbsdelf
+Configured with: ../gcc-13.3.0/configure --disable-libstdcxx-pch --enable-nls --with-libiconv-prefix=/usr --enable-__cxa_atexit --with-gxx-include-dir=/usr/pkg/gcc13/include/c++/ --enable-long-long --with-local-prefix=/usr/pkg/gcc13 --enable-threads=posix --with-boot-ldflags='-static-libstdc++ -static-libgcc -Wl,-R/usr/pkg/lib -Wl,-zrelro ' --without-zstd --with-arch=i486 --with-tune=i486 --with-system-zlib --disable-libssp --enable-languages='c obj-c++ objc fortran c++' --enable-shared --with-gnu-ld --with-ld=/usr/bin/ld --with-gnu-as --with-as=/usr/bin/as --prefix=/usr/pkg/gcc13 --build=i486--netbsdelf --host=i486--netbsdelf --infodir=/usr/pkg/gcc13/info --mandir=/usr/pkg/gcc13/man
+Thread model: posix
+Supported LTO compression algorithms: zlib
+gcc version 13.3.0 (GCC)  
+```
 Compiler on Windows 11:  
 ```
 > g++ -v  
