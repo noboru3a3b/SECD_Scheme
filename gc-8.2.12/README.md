@@ -36,3 +36,10 @@ pkg install devel/boehm-gc
 exit
 ```
 
+## (For NetBSD)
+### Execute the following.
+```bash
+su
+pkgin install boehm-gc
+exit
+```
