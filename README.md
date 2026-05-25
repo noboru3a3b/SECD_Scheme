@@ -51,7 +51,7 @@ The actual actions taken are as follows:
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
-I have built and tested this on clang++ on Ubuntu-24.04 and FreeBSD 15.0-RELEASE, and g++ on Windows 11.  
+I have built and tested this on clang++ on Ubuntu-24.04 and FreeBSD-15.0-RELEASE, and g++ on Windows 11.  
   
 Compiler on Ubuntu:  
 ```
