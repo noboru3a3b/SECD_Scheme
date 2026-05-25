@@ -285,7 +285,7 @@ FALSE
 scheme12>
 ```
 
-### (Side note)
+### Side note:
 I used to be an OS enthusiast, installing and building new operating systems almost every week.  
 As a result, I have many old PCs at home.  
 For this project, I wanted to prepare multiple build and execution environments,   
