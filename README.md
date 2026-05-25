@@ -47,7 +47,7 @@ The actual actions taken are as follows:
   
 - We've made several improvements, so We've updated the system manual. Author: Claude 4.5 Sonnet.
   
-- Added NetBSD-9.4 as a build environment. Author: Claude Sonnet 4.6.
+- We added NetBSD-9.4-i386 as a build and test environment. Author: Claude Sonnet 4.6.
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
