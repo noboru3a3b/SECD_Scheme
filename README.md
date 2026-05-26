@@ -296,5 +296,3 @@ so I dug out two old laptops and installed BSD-based operating systems.
 Both were configured as servers, and I found that NetBSD running on a Pentium-M is extremely efficient.  
 With this combination, it consumes almost no power in standby mode, and the fan doesn't even run.  
   
-In other words, its power-saving performance is outstanding!  
-  
