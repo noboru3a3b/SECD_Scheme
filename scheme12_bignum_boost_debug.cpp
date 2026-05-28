@@ -75,12 +75,12 @@ struct BigInt : public gc {
 #endif
     }
     
-    BigInt operator+(const BigInt& other) const { return BigInt(value + other.value); }
-    BigInt operator-(const BigInt& other) const { return BigInt(value - other.value); }
-    BigInt operator*(const BigInt& other) const { return BigInt(value * other.value); }
-    BigInt operator/(const BigInt& other) const { return BigInt(value / other.value); }
-    BigInt operator%(const BigInt& other) const { return BigInt(value % other.value); }
-    BigInt operator-() const { return BigInt(-value); }
+    BigInt operator+(const BigInt& other) const { return BigInt(BigIntType(value + other.value)); }
+    BigInt operator-(const BigInt& other) const { return BigInt(BigIntType(value - other.value)); }
+    BigInt operator*(const BigInt& other) const { return BigInt(BigIntType(value * other.value)); }
+    BigInt operator/(const BigInt& other) const { return BigInt(BigIntType(value / other.value)); }
+    BigInt operator%(const BigInt& other) const { return BigInt(BigIntType(value % other.value)); }
+    BigInt operator-() const { return BigInt(BigIntType(-value)); }
     
     bool operator==(const BigInt& other) const { return value == other.value; }
     bool operator!=(const BigInt& other) const { return value != other.value; }
