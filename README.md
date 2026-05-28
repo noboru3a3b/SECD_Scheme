@@ -47,7 +47,7 @@ The actual actions taken are as follows:
   
 - We've made several improvements, so We've updated the system manual. Author: Claude 4.5 Sonnet.
   
-- We added NetBSD-9.4-i386 as a build and test environment. Author: Claude Sonnet 4.6.
+- We added NetBSD-8.2-i386 as a build and test environment. Author: Claude Sonnet 4.6.  
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
@@ -78,15 +78,14 @@ InstalledDir: /.bastille/usr/bin
 
 Compiler on NetBSD:  
 ```
-> /usr/pkg/gcc13/bin/g++ -v
+> /usr/pkg/gcc8/bin/gcc -v
 Using built-in specs.
-COLLECT_GCC=/usr/pkg/gcc13/bin/g++
-COLLECT_LTO_WRAPPER=/usr/pkg/gcc13/libexec/gcc/i486--netbsdelf/13.3.0/lto-wrapper
+COLLECT_GCC=/usr/pkg/gcc8/bin/gcc
+COLLECT_LTO_WRAPPER=/usr/pkg/gcc8/libexec/gcc/i486--netbsdelf/8.3.0/lto-wrapper
 Target: i486--netbsdelf
-Configured with: ../gcc-13.3.0/configure --disable-libstdcxx-pch --enable-nls --with-libiconv-prefix=/usr --enable-__cxa_atexit --with-gxx-include-dir=/usr/pkg/gcc13/include/c++/ --enable-long-long --with-local-prefix=/usr/pkg/gcc13 --enable-threads=posix --with-boot-ldflags='-static-libstdc++ -static-libgcc -Wl,-R/usr/pkg/lib -Wl,-zrelro ' --without-zstd --with-arch=i486 --with-tune=i486 --with-system-zlib --disable-libssp --enable-languages='c obj-c++ objc fortran c++' --enable-shared --with-gnu-ld --with-ld=/usr/bin/ld --with-gnu-as --with-as=/usr/bin/as --prefix=/usr/pkg/gcc13 --build=i486--netbsdelf --host=i486--netbsdelf --infodir=/usr/pkg/gcc13/info --mandir=/usr/pkg/gcc13/man
+Configured with: ../gcc-8.3.0/configure --disable-libstdcxx-pch --with-system-zlib --enable-nls --with-libiconv-prefix=/usr --enable-__cxa_atexit --with-gxx-include-dir=/usr/pkg/gcc8/include/c++/ --disable-libssp --enable-languages='c obj-c++ objc fortran c++' --enable-shared --enable-long-long --with-local-prefix=/usr/pkg/gcc8 --enable-threads=posix --with-boot-ldflags='-static-libstdc++ -static-libgcc -Wl,-R/usr/pkg/lib ' --with-gnu-ld --with-ld=/usr/bin/ld --with-gnu-as --with-as=/usr/bin/as --with-arch=i486 --with-tune=i486 --prefix=/usr/pkg/gcc8 --build=i486--netbsdelf --host=i486--netbsdelf --infodir=/usr/pkg/gcc8/info --mandir=/usr/pkg/gcc8/man --enable-option-checking=yes
 Thread model: posix
-Supported LTO compression algorithms: zlib
-gcc version 13.3.0 (GCC)  
+gcc version 8.3.0 (GCC)   
 ```
 
 Compiler on Windows 11:  
