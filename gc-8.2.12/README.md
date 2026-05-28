@@ -40,6 +40,20 @@ exit
 ### Execute the following.
 ```bash
 su
-pkgin install boehm-gc
+# pkgsrc-2019Q3 をチェックアウト
+cd /usr
+cvs -q -z2 -d anoncvs@anoncvs.NetBSD.org:/cvsroot checkout -r pkgsrc-2019Q3 -P pkgsrc
+
+# bootstrap実行
+cd /usr/pkgsrc/bootstrap
+./bootstrap
+
+# PATH を通す
+echo 'export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH' >> /root/.profile
+. /root/.profile
+
+# 以後、必要なアプリをビルド
+cd /usr/pkgsrc/devel/boehm-gc
+bmake install clean GCC_REQD=8 PKGSRC_COMPILER=gcc
 exit
 ```
