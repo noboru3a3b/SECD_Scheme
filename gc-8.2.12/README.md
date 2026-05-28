@@ -39,6 +39,8 @@ exit
 ## (For NetBSD)
 ### Execute the following.
 ```bash
+# NetBSD-8.2 は古過ぎてアプリのバイナリは無いので、事前に以下が必要。
+
 su
 # pkgsrc-2019Q3 をチェックアウト
 cd /usr
@@ -51,8 +53,9 @@ cd /usr/pkgsrc/bootstrap
 # PATH を通す
 echo 'export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH' >> /root/.profile
 . /root/.profile
+exit
 
-# 以後、必要なアプリをビルド
+su
 cd /usr/pkgsrc/devel/boehm-gc
 bmake install clean GCC_REQD=8 PKGSRC_COMPILER=gcc
 exit
