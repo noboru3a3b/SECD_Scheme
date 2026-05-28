@@ -290,7 +290,7 @@ As a result, I have many old PCs at home.
 For this project, I wanted to prepare multiple build and execution environments,   
 so I dug out two old laptops and installed BSD-based operating systems.  
 - FMV LIFEBOOK A8390 CPU: Core i5 RAM: 4GB HDD: 500GB ---> FreeBSD-15.0-RELEASE-amd64  
-- FMV LIFEBOOK 820NAL CPU: Pentium-M RAM: 512MB HDD: 40GB ---> NetBSD-9.4-i386  
+- FMV LIFEBOOK 820NAL CPU: Pentium-M RAM: 512MB HDD: 40GB ---> NetBSD-8.2-i386  
   
 Both were configured as servers, and I found that NetBSD running on a Pentium-M is extremely efficient.  
 With this combination, it consumes almost no power in standby mode, and the fan doesn't even run.  
