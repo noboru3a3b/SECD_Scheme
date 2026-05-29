@@ -53,7 +53,6 @@ The actual actions taken are as follows:
 we enlisted the help of AI to create the ideal environment.
 Despite various difficulties, we were able to create a good environment, so
 we had AI summarize the development process in the document "NetBSD_Development_Guide.md".
-This is a treasure to me, so I registered it as part of the project documentation.
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
