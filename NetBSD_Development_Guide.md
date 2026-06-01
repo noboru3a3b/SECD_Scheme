@@ -581,7 +581,7 @@ sha1 /usr/pkgsrc/distfiles/boost_1_71_0.tar.bz2
 この状況で、今Boostライブラリをビルドしようとしています。
 Boostライブラリは、すでにgcc5.5でビルしたものが登録済みです。
 いま、以下のような状況。
-  
+
 boehm-gc-8.0.4      Garbage collection and memory leak detection for C and C++  
 gcc8-8.3.0nb1       The GNU Compiler Collection (GCC) - 8.0 Release Series  
 gcc8-libs-8.3.0nb1  The GNU Compiler Collection (GCC) support shared libraries  
@@ -589,7 +589,7 @@ boost-build-1.71.0  Free, peer-reviewed portable C++ source libraries (Boost.Bui
 boost-docs-1.71.0   Free, peer-reviewed portable C++ source libraries (documentation)  
 boost-jam-1.71.0nb1 Free, peer-reviewed portable C++ source libraries (Boost.Jam utility)  
 boost-headers-1.71.0nb1 Free, peer-reviewed portable C++ source libraries (build-time headers)  
-  
+
 Boostは、任意精度整数を実装するために使っています。
 この状況でどうするのがベストか、教えて頂けますか？
 
@@ -688,7 +688,7 @@ EndSection
 
 このPCはサーバとして使うので、IPアドレスが時々変わるのは不便でした。固定アドレスにする方法教えてください。
 
------ 
+-----
 (AI Ans)
 
 ## NetBSD-8.2 固定IPアドレスの設定
@@ -775,4 +775,100 @@ ping 192.168.1.1     # ゲートウェイへの疎通確認
 | SCPでのファイル転送 | 固定IP後は `scp ... user@192.168.1.100:~/` と直接指定できる |
 
 再起動後も設定が維持されるか、一度 `reboot` して `ifconfig wm0` で確認されることをお勧めします。
+
+---
+
+
+## Webサーバの設定
+
+
+### `/etc/inetd.conf` から http のコメントアウトを外す
+
+```sh
+
+http            stream  tcp     nowait:600      _httpd  /usr/libexec/httpd      httpd /var/www
+#http           stream  tcp6    nowait:600      _httpd  /usr/libexec/httpd      httpd /var/www
+ftp             stream  tcp     nowait  root    /usr/libexec/ftpd       ftpd -ll
+#ftp            stream  tcp6    nowait  root    /usr/libexec/ftpd       ftpd -ll
+#telnet         stream  tcp     nowait  root    /usr/libexec/telnetd    telnetd -a valid
+#telnet         stream  tcp6    nowait  root    /usr/libexec/telnetd    telnetd -a valid
+#shell          stream  tcp     nowait  root    /usr/libexec/rshd       rshd -L
+#shell          stream  tcp6    nowait  root    /usr/libexec/rshd       rshd -L
+#login          stream  tcp     nowait  root    /usr/libexec/rlogind    rlogind -L
+#login          stream  tcp6    nowait  root    /usr/libexec/rlogind    rlogind -L
+#exec           stream  tcp     nowait  root    /usr/libexec/rexecd     rexecd
+#exec           stream  tcp6    nowait  root    /usr/libexec/rexecd     rexecd
+#finger         stream  tcp     nowait  nobody  /usr/libexec/fingerd    fingerd -lsmu
+#finger         stream  tcp6    nowait  nobody  /usr/libexec/fingerd    fingerd -lsmu
+#ident          stream  tcp     nowait  nobody  /usr/libexec/identd     identd -l -o OTHER -e -N
+#ident          stream  tcp6    nowait  nobody  /usr/libexec/identd     identd -l -o OTHER -e -N
+#tftp           dgram   udp     wait    root    /usr/libexec/tftpd      tftpd -l -s /tftpboot
+#tftp           dgram   udp6    wait    root    /usr/libexec/tftpd      tftpd -l -s /tftpboot
+#comsat         dgram   udp     wait    root    /usr/libexec/comsat     comsat
+#comsat         dgram   udp6    wait    root    /usr/libexec/comsat     comsat
+#ntalk          dgram   udp     wait    nobody:tty      /usr/libexec/ntalkd     ntalkd
+#bootps         dgram   udp     wait    root    /usr/sbin/bootpd        bootpd
+
+```
+
+
+### `/etc/rc.conf` に httpd の設定を追加
+
+```sh
+
+#dhcpcd=YES
+#dhcpcd_flags="-qM bge0"
+ifconfig_bge0="inet 192.168.3.30 netmask 255.255.255.0"
+defaultroute="192.168.3.1"
+
+sshd=YES
+ntpd=YES
+ntpdate=YES
+mdnsd=YES
+#xdm=YES
+xdm=NO
+lvm=YES
+wscons=YES
+
+httpd=YES
+httpd_flags="-x index.html"
+httpd_wwwdir="/var/www"
+httpd_wwwuser="_httpd"
+
+```
+
+
+### `/var/www/` に htmlファイルを置く
+
+ユーザは、_httpd にすること。
+
+```sh
+
+rwxr-xr--   2 _httpd  wheel      512 May 31 22:36 index.files
+-rw-r--r--   1 _httpd  wheel    82359 May 31 22:36 index.htm_SAVE
+-rw-r--r--   1 _httpd  wheel    85798 May 31 22:36 index.html
+-rw-r--r--   1 _httpd  wheel    24206 May 31 22:36 index_100217.htm
+-rw-r--r--   1 _httpd  wheel    24454 May 31 22:36 index_100304.htm
+-rw-r--r--   1 _httpd  wheel    24481 May 31 22:36 index_100311.htm
+-rw-r--r--   1 _httpd  wheel    24509 May 31 22:36 index_100318.htm
+-rw-r--r--   1 _httpd  wheel    24593 May 31 22:36 index_20100629.htm
+-rw-r--r--   1 _httpd  wheel    30680 May 31 22:36 index_20100630.htm
+-rw-r--r--   1 _httpd  wheel    39933 May 31 22:36 infinite extent.html
+drwxr-xr--   2 _httpd  wheel      512 May 31 22:36 linux_device_driber_1.files
+-rw-r--r--   1 _httpd  wheel   125236 May 31 22:36 linux_device_driber_1.html
+-rw-r--r--   1 _httpd  wheel   182286 May 31 22:36 linux_device_driber_2.html
+-rw-r--r--   1 _httpd  wheel    65098 May 31 22:36 linux_device_driber_3.html
+-rw-r--r--   1 _httpd  wheel    40252 May 31 22:36 linux_page.html
+-rw-r--r--   1 _httpd  wheel    46977 May 31 22:36 lisp6_pl.html
+-rw-r--r--   1 _httpd  wheel    15398 May 31 22:36 maxima_page.html
+-rw-r--r--   1 _httpd  wheel    74820 May 31 22:36 my_lisp_page.html
+drwxr-xr--   2 _httpd  wheel      512 May 31 22:36 mylinux_2010.files
+-rw-r--r--   1 _httpd  wheel   638286 May 31 22:36 mylinux_2010.html
+-rw-r--r--   1 _httpd  wheel    16587 May 31 22:36 network_page.html
+-rw-r--r--   1 _httpd  wheel    15691 May 31 22:36 ruby_page.html
+-rw-r--r--   1 _httpd  wheel    42376 May 31 22:36 scheme_page.html
+
+```
+
+
 
