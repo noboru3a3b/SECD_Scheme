@@ -38,9 +38,8 @@ exit
 
 ## (For NetBSD)
 ### Execute the following.
-```bash
 # NetBSD-8.2 is too old and application binaries are not available, so you need to prepare pkgsrc beforehand.
-
+```bash
 su
 # Check out pkgsrc-2019Q3
 cd /usr
