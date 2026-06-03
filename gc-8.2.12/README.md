@@ -39,18 +39,18 @@ exit
 ## (For NetBSD)
 ### Execute the following.
 ```bash
-# NetBSD-8.2 は古過ぎてアプリのバイナリは無いので、事前に以下が必要。
+# NetBSD-8.2 is too old and application binaries are not available, so you need to prepare pkgsrc beforehand.
 
 su
-# pkgsrc-2019Q3 をチェックアウト
+# Check out pkgsrc-2019Q3
 cd /usr
 cvs -q -z2 -d anoncvs@anoncvs.NetBSD.org:/cvsroot checkout -r pkgsrc-2019Q3 -P pkgsrc
 
-# bootstrap実行
+# Execute bootstrap
 cd /usr/pkgsrc/bootstrap
 ./bootstrap
 
-# PATH を通す
+# Add to PATH
 echo 'export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH' >> /root/.profile
 . /root/.profile
 exit
