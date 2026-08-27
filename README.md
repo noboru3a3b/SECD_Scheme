@@ -52,7 +52,7 @@ The actual actions taken are as follows:
 - To create an ideal environment on NetBSD running on a Pentium-M, I enlisted the help of AI.
 I had the AI ​​summarize the development process in a document called "NetBSD_Development_Guide.md".
   
-- I have improved the red-black tree library to the point where it can serve as the foundation for a database.  
+- I have improved the red-black tree library to the point where it can serve as the foundation for a database. Author: Claude Code Sonnet 5.   
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
