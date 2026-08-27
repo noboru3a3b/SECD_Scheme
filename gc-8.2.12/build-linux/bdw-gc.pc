@@ -1,0 +1,10 @@
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=/usr/local/lib
+includedir=/usr/local/include
+
+Name: Boehm-Demers-Weiser Conservative Garbage Collector
+Description: A garbage collector for C and C++
+Version: 8.2.12
+Libs: -L${libdir}  -lgc -ldl
+Cflags: -I${includedir}

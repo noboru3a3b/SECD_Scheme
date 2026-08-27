@@ -1,0 +1,36 @@
+# for Linux
+# Makefile for scheme12 with Boost bignum support
+CXX = clang++
+
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Wno-unused-function
+
+GC_INCLUDE = -I/usr/local/include
+
+BOOST_INCLUDE = -I/usr/include/boost
+
+GC_LIB = -L/usr/local/lib -lgc -lgccpp
+
+TARGET = scheme12_debug
+SOURCE = scheme12_bignum_boost_debug.cpp
+
+.PHONY: all clean test
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE)
+	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $(TARGET) $(SOURCE) $(GC_LIB)
+
+clean:
+	rm -f $(TARGET) $(TARGET).exe libgc-1.dll libgccpp-1.dll
+
+test: $(TARGET)
+	@echo "Testing basic functionality..."
+	@echo "(+ 1 2 3)" | ./$(TARGET) || echo "Test requires interactive mode"
+
+# ヘルプターゲット
+help:
+	@echo "Available targets:"
+	@echo "  all    - Build scheme12_bignum"
+	@echo "  clean  - Remove built files"
+	@echo "  test   - Build and run basic test"
+	@echo "  help   - Show this help"

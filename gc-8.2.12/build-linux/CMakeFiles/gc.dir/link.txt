@@ -1,0 +1,1 @@
+/usr/bin/cc -fPIC -O3 -DNDEBUG -shared -Wl,--no-undefined -Wl,--dependency-file=CMakeFiles/gc.dir/link.d -Wl,-soname,libgc.so.1 -o libgc.so.1.5.6 CMakeFiles/gc.dir/extra/gc.c.o CMakeFiles/gc.dir/pthread_start.c.o  -ldl

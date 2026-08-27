@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -O3 -DNDEBUG -shared -Wl,--no-undefined -Wl,--dependency-file=CMakeFiles/gccpp.dir/link.d -Wl,-soname,libgccpp.so.1 -o libgccpp.so.1.5.0 CMakeFiles/gccpp.dir/gc_badalc.cc.o CMakeFiles/gccpp.dir/gc_cpp.cc.o  -Wl,-rpath,/workspaces/SECD_Scheme/gc-8.2.12/build-linux: libgc.so.1.5.6

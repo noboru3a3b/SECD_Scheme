@@ -1,0 +1,10 @@
+prefix=c:/w64devkit/x86_64-w64-mingw32
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: Boehm-Demers-Weiser Conservative Garbage Collector
+Description: A garbage collector for C and C++
+Version: 8.2.12
+Libs: -L${libdir}  -lgc 
+Cflags: -I${includedir}

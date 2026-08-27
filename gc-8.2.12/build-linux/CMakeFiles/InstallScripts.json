@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/workspaces/SECD_Scheme/gc-8.2.12/build-linux/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
