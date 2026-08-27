@@ -141,7 +141,6 @@
                 ((< key node-key) (rb-search (rb-left node) key))
                 (else (rb-search (rb-right node) key)))))))
 
-<<<<<<< HEAD
 ;;; Membership test, distinct from rb-search: a value of false/#f stored
 ;;; for a key must never be confused with "key not present".
 (define rb-contains?
@@ -153,8 +152,6 @@
                 ((< key node-key) (rb-contains? (rb-left node) key))
                 (else (rb-contains? (rb-right node) key)))))))
 
-=======
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
 ;;; Fix-up
 (define rb-fix-up
   (lambda (node)
@@ -236,7 +233,6 @@
                 (rb-flip-colors-delete node)))
           node))))
 
-<<<<<<< HEAD
 ;;; Delete minimum (internal). Precondition: this node has already been
 ;;; brought into the standard LLRB delete-descent invariant by the caller
 ;;; (node itself is red, or will become so via rb-move-red-left below).
@@ -244,10 +240,6 @@
 ;;; which establishes that invariant first. Calling this on a plain root
 ;;; (black, with black children) can leave the tree with a red root.
 (define rb-delete-min-impl
-=======
-;;; Delete minimum
-(define rb-delete-min
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
   (lambda (node)
     (if (rb-null? node)
         RB-NIL
@@ -258,7 +250,6 @@
                        (not (rb-null? (rb-left node)))
                        (rb-is-black? (rb-left (rb-left node))))
                   (set! node (rb-move-red-left node)))
-<<<<<<< HEAD
               (rb-set-left! node (rb-delete-min-impl (rb-left node)))
               (rb-fix-up node))))))
 
@@ -280,11 +271,6 @@
                 (rb-set-color! result BLACK))
             result)))))
 
-=======
-              (rb-set-left! node (rb-delete-min (rb-left node)))
-              (rb-fix-up node))))))
-
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
 ;;; Delete implementation
 (define rb-delete-impl
   (lambda (node key)
@@ -318,16 +304,11 @@
                           (let ((min-node (rb-search-min-node (rb-right node))))
                             (rb-set-key! node (rb-key min-node))
                             (rb-set-data! node (rb-data min-node))
-<<<<<<< HEAD
                             (rb-set-right! node (rb-delete-min-impl (rb-right node))))
-=======
-                            (rb-set-right! node (rb-delete-min (rb-right node))))
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
                           (rb-set-right! node (rb-delete-impl (rb-right node) key)))
                       
                       (rb-fix-up node)))))))))
 
-<<<<<<< HEAD
 ;;; Delete (external interface). Paints the root red before descending
 ;;; when both its children are black (the standard Sedgewick bracket),
 ;;; then forces the result black. Without this, the delete-descent
@@ -335,14 +316,10 @@
 ;;; few levels down by luck of rb-fix-up's insertion-style color-set
 ;;; rather than by construction - this makes correctness a property of
 ;;; the algorithm again, not an accident of the current fix-up formula.
-=======
-;;; Delete (external interface)
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
 (define rb-delete
   (lambda (node key)
     (if (rb-null? node)
         RB-NIL
-<<<<<<< HEAD
         (begin
           (if (and (rb-is-black? (rb-left node))
                    (rb-is-black? (rb-right node)))
@@ -351,12 +328,6 @@
             (if (not (rb-null? result))
                 (rb-set-color! result BLACK))
             result)))))
-=======
-        (let ((result (rb-delete-impl node key)))
-          (if (not (rb-null? result))
-              (rb-set-color! result BLACK))
-          result))))
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
 
 ;;; In-order traversal (silent, returns list)
 (define rb-to-list
@@ -377,7 +348,6 @@
           (newline)
           (rb-traverse (rb-right node))))))
 
-<<<<<<< HEAD
 ;;; Validate red-black properties. Returns black height, or -1 on any
 ;;; violation. Besides the original "red node has no red child" and
 ;;; "black height matches on both sides" checks, this also rejects a
@@ -387,14 +357,10 @@
 ;;; the whole algorithm depends on has been broken by some code path -
 ;;; a class of corruption the original checks (height + red-red only)
 ;;; could pass right through undetected.
-=======
-;;; Validate red-black properties
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
 (define rb-check-property
   (lambda (node)
     (if (rb-null? node)
         1
-<<<<<<< HEAD
         (let ((self-ok true))
           (if (rb-is-red? (rb-right node))
               (begin
@@ -447,39 +413,6 @@
           (set! rb-order-prev (rb-key node))
           (set! rb-order-prev-set true)
           (rb-check-order (rb-right node))))))
-=======
-        (begin
-          (if (rb-is-red? node)
-              (if (or (rb-is-red? (rb-left node))
-                      (rb-is-red? (rb-right node)))
-                  (begin
-                    (display "ERROR: Red node has red child at key ")
-                    (display (rb-key node))
-                    (newline)
-                    -1)
-                  (let ((left-height (rb-check-property (rb-left node)))
-                        (right-height (rb-check-property (rb-right node))))
-                    (if (or (= left-height -1) (= right-height -1))
-                        -1
-                        (if (not (= left-height right-height))
-                            (begin
-                              (display "ERROR: Black height mismatch at node ")
-                              (display (rb-key node))
-                              (newline)
-                              -1)
-                            left-height))))
-              (let ((left-height (rb-check-property (rb-left node)))
-                    (right-height (rb-check-property (rb-right node))))
-                (if (or (= left-height -1) (= right-height -1))
-                    -1
-                    (if (not (= left-height right-height))
-                        (begin
-                          (display "ERROR: Black height mismatch at node ")
-                          (display (rb-key node))
-                          (newline)
-                          -1)
-                        (+ left-height 1)))))))))
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
 
 ;;; Validate (external interface) - IMPROVED
 (define rb-validate
@@ -495,14 +428,10 @@
        false)
       (else
        (let ((height (rb-check-property node)))
-<<<<<<< HEAD
          (set! rb-order-ok true)
          (set! rb-order-prev-set false)
          (rb-check-order node)
          (if (or (= height -1) (not rb-order-ok))
-=======
-         (if (= height -1)
->>>>>>> 929b193a4b701f26cf3918929444e617995a8b98
              (begin
                (display "Tree is INVALID")
                (newline)
