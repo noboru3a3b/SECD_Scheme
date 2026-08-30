@@ -3,7 +3,7 @@
 {
 	"name": "Ubuntu",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/base:resolute"
+	"image": "mcr.microsoft.com/devcontainers/base:resolute",
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
@@ -11,8 +11,10 @@
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
-	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "uname -a",
+	// clang++ と Boost はベースイメージに含まれているが、Boehm GC の開発用ヘッダは
+	// 含まれていないため、scheme12_bignum_boost_debug.cpp のビルドに必要な libgc-dev
+	// を導入する（Makefile.linux が期待する環境と一致させるため）。
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y libgc-dev",
 
 	// Configure tool-specific properties.
 	// "customizations": {},
