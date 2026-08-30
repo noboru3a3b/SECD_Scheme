@@ -11,10 +11,10 @@
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
-	// clang++ と Boost はベースイメージに含まれているが、Boehm GC の開発用ヘッダは
-	// 含まれていないため、scheme12_bignum_boost_debug.cpp のビルドに必要な libgc-dev
-	// を導入する（Makefile.linux が期待する環境と一致させるため）。
-	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y libgc-dev",
+	// ベースイメージには clang++ / Boost / Boehm GC の開発用ヘッダが含まれていないため、
+	// scheme12_bignum_boost_debug.cpp のビルドに必要な clang, libboost-dev, libgc-dev を
+	// 導入する（Makefile.linux および CI (build.yml) が期待する環境と一致させるため）。
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y clang libboost-dev libgc-dev",
 
 	// Configure tool-specific properties.
 	// "customizations": {},
