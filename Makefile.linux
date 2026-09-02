@@ -6,7 +6,7 @@ CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Wno-unused-function
 
 GC_INCLUDE = -I/usr/local/include
 
-BOOST_INCLUDE = -I/usr/include/boost
+BOOST_INCLUDE = -I/usr/include
 
 GC_LIB = -L/usr/local/lib -lgc -lgccpp
 
