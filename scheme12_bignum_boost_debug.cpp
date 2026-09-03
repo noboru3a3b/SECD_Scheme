@@ -927,6 +927,7 @@ static Instruction make_ins(Op op) {
 }
 
 static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail);
+static void comp_body(ValuePtr body, const CompileEnv& env, CodePtr code, bool tail);
 static ValuePtr macro_expand_1_expr(ValuePtr expr);
 
 // Macro expansion helpers (変更なし - 以前のコードと同じ)
@@ -1150,7 +1151,7 @@ static ValuePtr expand_do(ValuePtr rest) {
     });
 }
 
-static void comp_body(ValuePtr body, const CompileEnv& env, CodePtr code) {
+static void comp_body(ValuePtr body, const CompileEnv& env, CodePtr code, bool tail) {
     ValueVec forms = vector_from_list(body);
     if (forms.empty()) {
         Instruction ldc = make_ins(Op::LDC);
@@ -1160,7 +1161,7 @@ static void comp_body(ValuePtr body, const CompileEnv& env, CodePtr code) {
     }
     for (std::size_t i = 0; i < forms.size(); ++i) {
         bool last = (i + 1 == forms.size());
-        comp(forms[i], env, code, last);
+        comp(forms[i], env, code, last && tail);
         if (!last) emit(code, make_ins(Op::POP));
     }
 }
@@ -1283,19 +1284,20 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
         ValuePtr rem2 = cdr(rem1);
         ValuePtr else_e = is_nil(rem2) ? g_nil : car(rem2);
         comp(test, env, code, false);
-        Instruction sel = make_ins(Op::SEL);
+        Instruction sel = make_ins(tail ? Op::SELR : Op::SEL);
         sel.ct = make_code();
         sel.cf = make_code();
         comp(then_e, env, sel.ct, tail);
         comp(else_e, env, sel.cf, tail);
-        emit(sel.ct, make_ins(Op::JOIN));
-        emit(sel.cf, make_ins(Op::JOIN));
+        Op term = tail ? Op::RTN : Op::JOIN;
+        emit(sel.ct, make_ins(term));
+        emit(sel.cf, make_ins(term));
         emit(code, sel);
         return;
     }
 
     if (is_symbol(head, "begin")) {
-        comp_body(rest, env, code);
+        comp_body(rest, env, code, tail);
         return;
     }
 
@@ -1311,7 +1313,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
         if (rest_param) frame.push_back(*rest_param);
         env2.insert(env2.begin(), frame);
         CodePtr body_code = make_code();
-        comp_body(body, env2, body_code);
+        comp_body(body, env2, body_code, true);
         emit(body_code, make_ins(Op::RTN));
         Instruction ins = make_ins(Op::LDF);
         ins.lambda_code = body_code;
@@ -1404,7 +1406,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
         aa.a = static_cast<int>(xs.size() - 1);
         emit(code, aa);
         comp(fn, env, code, false);
-        emit(code, make_ins(Op::APP));
+        emit(code, make_ins(tail ? Op::TAPP : Op::APP));
         return;
     }
 
