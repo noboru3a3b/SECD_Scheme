@@ -39,10 +39,31 @@
 #error "Boehm GC headers not found. Install bdwgc or add include path."
 #endif
 
+// cpp_int の limb 型（64bit 環境では unsigned long long）はポインタを含まない。
+// gc_allocator.h は unsigned long までしか ptr-free 宣言していないため、
+// ここで追加宣言して limb 配列を GC_MALLOC_ATOMIC で確保させる
+// （＝GC のスキャン対象から外し、数値のビット列がポインタと誤認されて
+//   ゴミを保持してしまう保守的 GC の偽retentionも防ぐ）。
+GC_DECLARE_PTRFREE(unsigned long long);
+
+// Scheme の文字列値は GC 管理下のバッファに置く。
+// char は ptr-free 宣言済みなので GC_MALLOC_ATOMIC で確保される。
+using GcString = std::basic_string<char, std::char_traits<char>, gc_allocator<char> >;
+static inline std::string to_std(const GcString& s) { return std::string(s.data(), s.size()); }
+static inline GcString to_gc(const std::string& s) { return GcString(s.data(), s.size()); }
+
 #if __has_include(<boost/multiprecision/cpp_int.hpp>)
 #include <boost/multiprecision/cpp_int.hpp>
 #define HAS_BIGNUM
-using BigIntType = boost::multiprecision::cpp_int;
+// cpp_int の limb 配列は Boehm GC 管理下に置く。
+// gc 継承クラスはデストラクタが呼ばれないため、既定の std::allocator
+// （libgccpp により GC_MALLOC_UNCOLLECTABLE へ差し替えられる）だと
+// limb 配列が回収されずルート集合に残り続けてしまう。
+using BigIntType = boost::multiprecision::number<
+    boost::multiprecision::cpp_int_backend<0, 0,
+        boost::multiprecision::signed_magnitude,
+        boost::multiprecision::unchecked,
+        gc_allocator<unsigned long long> > >;
 #else
 #warning "Boost.Multiprecision not found. Using long long (limited precision)."
 using BigIntType = long long;
@@ -125,7 +146,8 @@ using CodePtr = Code*;
 using BigIntPtr = BigInt*;
 using FilePortPtr = FilePort*;
 using ValueVec = std::vector<ValuePtr, gc_allocator<ValuePtr>>;
-using DumpFrameVec = std::vector<DumpFrame, gc_allocator<DumpFrame>>;
+struct DumpNode;
+using DumpPtr = DumpNode*;
 using StringValueMap = std::unordered_map<std::string, ValuePtr,
     std::hash<std::string>, std::equal_to<std::string>,
     traceable_allocator<std::pair<const std::string, ValuePtr>>>;
@@ -184,14 +206,30 @@ struct DumpFrame {
     std::size_t pc;
 };
 
+// ダンプは永続リンクリスト。push はノード1個の確保、pop はポインタの付け替えで、
+// 継続の捕捉は「今の先頭ポインタを持つ」だけの O(1) になる。
+// ノードは不変なので、捕捉後に VM 側が push/pop しても捕捉済みの鎖は壊れない。
+struct DumpNode : public gc {
+    DumpFrame frame;
+    DumpPtr next;
+    std::size_t depth;
+    DumpNode(DumpFrame f, DumpPtr n)
+        : frame(std::move(f)), next(n), depth(n ? n->depth + 1 : 1) {}
+};
+
+static inline DumpPtr dump_push(DumpPtr d, DumpFrame f) {
+    return new DumpNode(std::move(f), d);
+}
+static inline std::size_t dump_depth(DumpPtr d) { return d ? d->depth : 0; }
+
 struct Continuation : public gc {
     ValueVec s;
     ValueVec e;
     CodePtr c;
     std::size_t pc;
-    DumpFrameVec d;
-    Continuation(ValueVec st, ValueVec en, CodePtr code, std::size_t p, DumpFrameVec dump)
-        : s(std::move(st)), e(std::move(en)), c(code), pc(p), d(std::move(dump)) {}
+    DumpPtr d;
+    Continuation(ValueVec st, ValueVec en, CodePtr code, std::size_t p, DumpPtr dump)
+        : s(std::move(st)), e(std::move(en)), c(code), pc(p), d(dump) {}
 };
 
 using PrimitiveFn = std::function<ValuePtr(const ValueVec&)>;
@@ -208,7 +246,7 @@ using PrimitiveInfoPtr = PrimitiveInfo*;
 struct EofTag {};
 
 struct Value : public gc {
-    using Data = std::variant<NilTag, bool, BigIntPtr, std::string, Symbol, PairPtr, 
+    using Data = std::variant<NilTag, bool, BigIntPtr, GcString, Symbol, PairPtr, 
                              ClosurePtr, ContPtr, PrimitiveInfoPtr, FilePortPtr, VectorPtr, 
                              MacroPtr, SpecialFormPtr, EofTag>;  // ← EofTag追加
     Data data;
@@ -217,7 +255,7 @@ struct Value : public gc {
 
 enum class Op {
     LD, LDC, LDG, LDF, ARGS, ARGS_AP, APP, TAPP, RTN,
-    SEL, SELR, JOIN, POP, DEF, DEFM, LSET, GSET, LDCT, CALLCC, STOP
+    SEL, SELR, JOIN, POP, DEF, DEFM, LSET, GSET, LDCT, CALLCC, TCALLCC, STOP
 };
 
 struct Instruction {
@@ -273,7 +311,8 @@ static ValuePtr make_int(const std::string& s, int base = 10) {
     return make_int(BigInt(s, base));
 }
 
-static ValuePtr make_string(const std::string& s) { return make_value(s); }
+static ValuePtr make_string(const GcString& s) { return make_value(s); }
+static ValuePtr make_string(const std::string& s) { return make_value(to_gc(s)); }
 
 static ValuePtr make_symbol(const std::string& s) {
     auto it = g_symbol_intern.find(s);
@@ -302,7 +341,7 @@ static ValuePtr make_closure(const std::vector<std::string, gc_allocator<std::st
 }
 
 static ValuePtr make_cont(const ValueVec& s, const ValueVec& e, CodePtr c, std::size_t pc, 
-                         const DumpFrameVec& d) {
+                         DumpPtr d) {
     ContPtr cont = new Continuation(s, e, c, pc, d);
     ValuePtr value = make_value(cont);
     GC_reachable_here(c);
@@ -352,12 +391,12 @@ static VectorPtr as_vector(const ValuePtr& v) {
 }
 
 static bool is_string(const ValuePtr& v) {
-    return v && std::holds_alternative<std::string>(v->data);
+    return v && std::holds_alternative<GcString>(v->data);
 }
 
-static std::string& as_string(const ValuePtr& v) {
+static GcString& as_string(const ValuePtr& v) {
     if (!is_string(v)) vm_error("expected string");
-    return std::get<std::string>(v->data);
+    return std::get<GcString>(v->data);
 }
 
 static bool is_nil(const ValuePtr& v) {
@@ -419,6 +458,7 @@ static std::string op_to_string(Op op) {
         case Op::GSET: return "GSET";
         case Op::LDCT: return "LDCT";
         case Op::CALLCC: return "CALLCC";
+        case Op::TCALLCC: return "TCALLCC";
         case Op::STOP: return "STOP";
         default: return "???";
     }
@@ -666,8 +706,8 @@ static std::string to_string_with_visited(const ValuePtr& v,
         return std::get<bool>(v->data) ? "TRUE" : "FALSE";
     if (std::holds_alternative<BigIntPtr>(v->data)) 
         return std::get<BigIntPtr>(v->data)->to_string();
-    if (std::holds_alternative<std::string>(v->data)) 
-        return "\"" + std::get<std::string>(v->data) + "\"";
+    if (std::holds_alternative<GcString>(v->data)) 
+        return "\"" + to_std(std::get<GcString>(v->data)) + "\"";
     if (std::holds_alternative<Symbol>(v->data)) 
         return std::get<Symbol>(v->data).name;
     if (std::holds_alternative<PairPtr>(v->data)) 
@@ -1188,7 +1228,7 @@ static bool extract_params(ValuePtr params_expr,
 static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) {
     if (!expr || is_nil(expr) || std::holds_alternative<bool>(expr->data) || 
         std::holds_alternative<BigIntPtr>(expr->data) || 
-        std::holds_alternative<std::string>(expr->data) ||
+        std::holds_alternative<GcString>(expr->data) ||
         std::holds_alternative<VectorPtr>(expr->data)) {
         Instruction ldc = make_ins(Op::LDC);
         ldc.constant = expr ? expr : g_nil;
@@ -1393,7 +1433,8 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
 
     if (is_symbol(head, "call/cc")) {
         comp(car(rest), env, code, false);
-        emit(code, make_ins(Op::CALLCC));
+        // 末尾位置なら TAPP と同様にダンプを積まない（TCO を効かせる）
+        emit(code, make_ins(tail ? Op::TCALLCC : Op::CALLCC));
         return;
     }
 
@@ -1457,7 +1498,7 @@ struct VM {
     ValueVec e;
     CodePtr c;
     std::size_t pc = 0;
-    DumpFrameVec d;
+    DumpPtr d = nullptr;
     int step_count = 0;
 
     void trace_state(const Instruction& ins) {
@@ -1506,7 +1547,7 @@ struct VM {
             }
         }
         
-        std::cout << "Dump: " << d.size() << " frame(s)\n";
+        std::cout << "Dump: " << dump_depth(d) << " frame(s)\n";
         std::cout << std::flush;
     }
 
@@ -1627,7 +1668,7 @@ struct VM {
                     }
                     
                     if (ins.op == Op::APP) {
-                        d.push_back(DumpFrame{s, e, c, pc});
+                        d = dump_push(d, DumpFrame{s, e, c, pc});
                     }
                     
                     s.clear();
@@ -1642,17 +1683,17 @@ struct VM {
                     break;
                 }
                 case Op::RTN: {
-                    if (d.empty()) {
+                    if (!d) {
                         return s.empty() ? g_nil : s.back();
                     }
                     ValuePtr r = s.empty() ? g_nil : s.back();
-                    DumpFrame f = d.back();
-                    d.pop_back();
-                    s = f.s;
+                    DumpPtr top = d;   // ノードを基底ポインタで押さえてから鎖を進める
+                    d = top->next;
+                    s = top->frame.s;
                     s.push_back(r);
-                    e = f.e;
-                    c = f.c;
-                    pc = f.pc;
+                    e = top->frame.e;
+                    c = top->frame.c;
+                    pc = top->frame.pc;
                     break;
                 }
                 case Op::SEL:
@@ -1663,18 +1704,17 @@ struct VM {
                     CodePtr next = is_true(cond) ? ins.ct : ins.cf;
                     if (!next) vm_error("SEL missing branch");
                     if (ins.op == Op::SEL) {
-                        d.push_back(DumpFrame{s, e, c, pc});
+                        d = dump_push(d, DumpFrame{s, e, c, pc});
                     }
                     c = next;
                     pc = 0;
                     break;
                 }
                 case Op::JOIN: {
-                    if (d.empty()) vm_error("JOIN dump underflow");
-                    DumpFrame f = d.back();
-                    d.pop_back();
-                    c = f.c;
-                    pc = f.pc;
+                    if (!d) vm_error("JOIN dump underflow");
+                    c = d->frame.c;
+                    pc = d->frame.pc;
+                    d = d->next;
                     break;
                 }
                 case Op::POP:
@@ -1730,7 +1770,8 @@ struct VM {
                 case Op::LDCT:
                     s.push_back(make_cont(s, e, c, pc, d));
                     break;
-                case Op::CALLCC: {
+                case Op::CALLCC:
+                case Op::TCALLCC: {
                     if (s.empty()) vm_error("CALLCC stack underflow");
                     ValuePtr proc = s.back();
                     s.pop_back();
@@ -1766,7 +1807,9 @@ struct VM {
                         frame.push_back(list_from_vector(rest));
                     }
                     
-                    d.push_back(DumpFrame{s, e, c, pc});
+                    if (ins.op == Op::CALLCC) {
+                        d = dump_push(d, DumpFrame{s, e, c, pc});
+                    }
                     s.clear();
                     ValueVec new_e;
                     // 改善：フレームをベクタとして保持
@@ -2088,9 +2131,9 @@ static bool value_equal_with_visited(ValuePtr a, ValuePtr b, VisitedMap& visited
         std::holds_alternative<BigIntPtr>(b->data)) {
         return as_int(a) == as_int(b);
     }
-    if (std::holds_alternative<std::string>(a->data) && 
-        std::holds_alternative<std::string>(b->data)) {
-        return std::get<std::string>(a->data) == std::get<std::string>(b->data);
+    if (std::holds_alternative<GcString>(a->data) && 
+        std::holds_alternative<GcString>(b->data)) {
+        return std::get<GcString>(a->data) == std::get<GcString>(b->data);
     }
     if (std::holds_alternative<Symbol>(a->data) && std::holds_alternative<Symbol>(b->data)) {
         return std::get<Symbol>(a->data).name == std::get<Symbol>(b->data).name;
@@ -2353,10 +2396,10 @@ static ValuePtr prim_newline(const ValueVec& args) {
 
 // File I/O primitives
 static ValuePtr prim_open_input_file(const ValueVec& args) {
-    if (args.size() != 1 || !std::holds_alternative<std::string>(args[0]->data)) {
+    if (args.size() != 1 || !std::holds_alternative<GcString>(args[0]->data)) {
         vm_error("open-input-file expects a string path");
     }
-    std::string path = std::get<std::string>(args[0]->data);
+    std::string path = to_std(std::get<GcString>(args[0]->data));
     std::FILE* fp = std::fopen(path.c_str(), "rb");
     if (!fp) {
         vm_error("open-input-file: cannot open file: " + path);
@@ -2366,10 +2409,10 @@ static ValuePtr prim_open_input_file(const ValueVec& args) {
 }
 
 static ValuePtr prim_open_output_file(const ValueVec& args) {
-    if (args.size() != 1 || !std::holds_alternative<std::string>(args[0]->data)) {
+    if (args.size() != 1 || !std::holds_alternative<GcString>(args[0]->data)) {
         vm_error("open-output-file expects a string path");
     }
-    std::string path = std::get<std::string>(args[0]->data);
+    std::string path = to_std(std::get<GcString>(args[0]->data));
     std::FILE* fp = std::fopen(path.c_str(), "wb");
     if (!fp) {
         vm_error("open-output-file: cannot open file: " + path);
@@ -2470,14 +2513,14 @@ static ValuePtr prim_write_char(const ValueVec& args) {
     if (args.size() != 2) {
         vm_error("write-char expects 2 args (char, port)");
     }
-    if (!std::holds_alternative<std::string>(args[0]->data)) {
+    if (!std::holds_alternative<GcString>(args[0]->data)) {
         vm_error("write-char: first arg must be a string (char)");
     }
     if (!std::holds_alternative<FilePortPtr>(args[1]->data)) {
         vm_error("write-char: second arg must be a port");
     }
     
-    std::string s = std::get<std::string>(args[0]->data);
+    std::string s = to_std(std::get<GcString>(args[0]->data));
     if (s.empty()) {
         vm_error("write-char: empty string");
     }
@@ -2607,7 +2650,7 @@ static ValuePtr prim_make_string(const ValueVec& args) {
     
     char fill_char = ' ';
     if (args.size() == 2) {
-        std::string& s = as_string(args[1]);
+        GcString& s = as_string(args[1]);
         if (s.empty()) vm_error("make-string: empty fill char");
         fill_char = s[0];
     }
@@ -2622,7 +2665,7 @@ static ValuePtr prim_string_length(const ValueVec& args) {
 
 static ValuePtr prim_string_ref(const ValueVec& args) {
     if (args.size() != 2) vm_error("string-ref expects 2 args");
-    std::string& s = as_string(args[0]);
+    GcString& s = as_string(args[0]);
     BigInt& idx = as_int(args[1]);
     
     long long i = safe_bigint_to_ll(idx, "string-ref");  // 修正
@@ -2635,9 +2678,9 @@ static ValuePtr prim_string_ref(const ValueVec& args) {
 
 static ValuePtr prim_string_set(const ValueVec& args) {
     if (args.size() != 3) vm_error("string-set! expects 3 args");
-    std::string& s = as_string(args[0]);
+    GcString& s = as_string(args[0]);
     BigInt& idx = as_int(args[1]);
-    std::string& newchar = as_string(args[2]);
+    GcString& newchar = as_string(args[2]);
     
     if (newchar.empty()) vm_error("string-set!: empty char string");
     
@@ -2652,7 +2695,7 @@ static ValuePtr prim_string_set(const ValueVec& args) {
 
 static ValuePtr prim_substring(const ValueVec& args) {
     if (args.size() < 2 || args.size() > 3) vm_error("substring expects 2 or 3 args");
-    std::string& s = as_string(args[0]);
+    GcString& s = as_string(args[0]);
     BigInt& start = as_int(args[1]);
     
     long long start_val = safe_bigint_to_ll(start, "substring");  // 修正
@@ -2675,7 +2718,7 @@ static ValuePtr prim_substring(const ValueVec& args) {
 }
 
 static ValuePtr prim_string_append(const ValueVec& args) {
-    std::string result;
+    GcString result;
     for (auto& arg : args) {
         result += as_string(arg);
     }
@@ -2684,7 +2727,7 @@ static ValuePtr prim_string_append(const ValueVec& args) {
 
 static ValuePtr prim_string_to_list(const ValueVec& args) {
     if (args.size() != 1) vm_error("string->list expects 1 arg");
-    std::string& s = as_string(args[0]);
+    GcString& s = as_string(args[0]);
     ValueVec chars;
     for (char c : s) {
         chars.push_back(make_string(std::string(1, c)));
@@ -2695,10 +2738,10 @@ static ValuePtr prim_string_to_list(const ValueVec& args) {
 static ValuePtr prim_list_to_string(const ValueVec& args) {
     if (args.size() != 1) vm_error("list->string expects 1 arg");
     ValuePtr ls = args[0];
-    std::string result;
+    GcString result;
     while (!is_nil(ls)) {
         if (!is_pair(ls)) vm_error("list->string: not a proper list");
-        std::string& ch = as_string(car(ls));
+        GcString& ch = as_string(car(ls));
         if (!ch.empty()) result += ch[0];
         ls = cdr(ls);
     }
@@ -2738,7 +2781,7 @@ static ValuePtr prim_number_to_string(const ValueVec& args) {
 static ValuePtr prim_string_to_number(const ValueVec& args) {
     if (args.size() != 1) vm_error("string->number expects 1 arg");
     try {
-        return make_int(as_string(args[0]));
+        return make_int(to_std(as_string(args[0])));
     } catch (...) {
         return make_bool(false);
     }
@@ -2746,7 +2789,7 @@ static ValuePtr prim_string_to_number(const ValueVec& args) {
 
 static ValuePtr prim_char_to_integer(const ValueVec& args) {
     if (args.size() != 1) vm_error("char->integer expects 1 arg");
-    std::string& s = as_string(args[0]);
+    GcString& s = as_string(args[0]);
     if (s.empty()) vm_error("char->integer: empty string");
     return make_int(BigInt(static_cast<long long>(static_cast<unsigned char>(s[0]))));
 }
@@ -2934,10 +2977,10 @@ static void load_startup_libraries(const char* argv0) {
 }
 
 static ValuePtr prim_load(const ValueVec& args) {
-    if (args.empty() || !args[0] || !std::holds_alternative<std::string>(args[0]->data)) {
+    if (args.empty() || !args[0] || !std::holds_alternative<GcString>(args[0]->data)) {
         vm_error("load expects a string path");
     }
-    std::string path = std::get<std::string>(args[0]->data);
+    std::string path = to_std(std::get<GcString>(args[0]->data));
     return load_from_path(path);
 }
 
@@ -3001,7 +3044,7 @@ static ValuePtr prim_symbol_to_string(const ValueVec& args) {
 static ValuePtr prim_string_to_symbol(const ValueVec& args) {
     if (args.size() != 1) vm_error("string->symbol expects 1 arg");
     if (!is_string(args[0])) vm_error("string->symbol expects a string");
-    return make_symbol(as_string(args[0]));
+    return make_symbol(to_std(as_string(args[0])));
 }
 
 // GC primitives
@@ -3180,8 +3223,8 @@ Example inspection:
 
 static ValuePtr prim_gensym(const ValueVec& args) {
     std::string prefix = "g";
-    if (!args.empty() && std::holds_alternative<std::string>(args[0]->data)) {
-        prefix = std::get<std::string>(args[0]->data);
+    if (!args.empty() && std::holds_alternative<GcString>(args[0]->data)) {
+        prefix = to_std(std::get<GcString>(args[0]->data));
     }
     return make_gensym(prefix);
 }
