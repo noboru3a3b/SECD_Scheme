@@ -178,6 +178,38 @@ struct SchemeError : std::runtime_error {
     throw SchemeError(msg, SourcePos{});
 }
 
+// --- 本文の形（7日目の決定33） ---------------------------------------------
+//
+// 本文は **見出し1行 + 字下げした詳細行** に揃える。見出しは「誰が」「何を
+// しくじったか」だけを言い、「何を期待していたか」「実際は何だったか」は
+// 詳細行に置く。読む側が毎回同じ場所を見れば済むようにするのが目的。
+//
+//   car: wrong type of argument
+//     expected: pair
+//     given: 5
+//
+// 見出しの語彙は次の4つに限る。増やすときは §4.2 に足してから使うこと。
+//   wrong type of argument / wrong number of arguments /
+//   index out of range / bad syntax in <form>
+//
+// 詳細行の綴りはここに閉じ込める。文面を各所で組み立てさせない。
+
+static std::string detail(std::string_view label, std::string_view text) {
+    return "\n  " + std::string(label) + ": " + std::string(text);
+}
+static std::string expected_given(std::string_view expected, std::string_view given) {
+    return detail("expected", expected) + detail("given", given);
+}
+
+// 処理系自身の不変条件が壊れた場合。**利用者の書いたプログラムの誤りではない。**
+// VM のスタック不足や、検査済みのはずの型が違う、といったものはこちら。
+// 利用者が自分の誤りと取り違えないよう、見出しで明示的に切り分ける。
+[[noreturn]] static void internal_error(const SourcePos& pos, const std::string& what) {
+    throw SchemeError("internal error: " + what +
+                      detail("note", "this is a bug in scheme13 itself, "
+                                     "not in the program being run"), pos);
+}
+
 // エラーの本文を組み立てる。呼び出し側が "Error: " などの前置きを付ける。
 //
 //   mylib.scm:42:8: bad syntax in define:
@@ -469,27 +501,33 @@ static bool is_symbol_named(ValuePtr v, std::string_view name) {
 }
 
 // --- アクセサ --------------------------------------------------------------
+//
+// **これらは処理系の内部用で、利用者のプログラムからは直に到達しない。**
+// 利用者の値を検査するのは構文検査（セクション6）とプリミティブ（セクション11）の
+// 仕事で、そこを素通りしてここに落ちたなら scheme13 側の検査漏れである。
+// だから型が違ったときは internal_error にする。scheme12 は利用者の誤りと
+// 見分けのつかない "expected pair" を返していて、どちらの問題か分からなかった。
 
 static Pair* as_pair(ValuePtr v) {
-    if (!is_pair(v)) error_here("expected pair");
+    if (!is_pair(v)) internal_error(SourcePos{}, "as_pair on a non-pair");
     return static_cast<Pair*>(v);
 }
 static GcString& as_string(ValuePtr v) {
-    if (!is_string(v)) error_here("expected string");
+    if (!is_string(v)) internal_error(SourcePos{}, "as_string on a non-string");
     return static_cast<Str*>(v)->s;
 }
 static Vector* as_vector(ValuePtr v) {
-    if (!is_vector(v)) error_here("expected vector");
+    if (!is_vector(v)) internal_error(SourcePos{}, "as_vector on a non-vector");
     return static_cast<Vector*>(v);
 }
 static const GcString& as_symbol_name(ValuePtr v) {
-    if (!is_symbol(v)) error_here("expected symbol");
+    if (!is_symbol(v)) internal_error(SourcePos{}, "as_symbol_name on a non-symbol");
     return static_cast<Symbol*>(v)->name;
 }
 static BigInt as_bigint(ValuePtr v) {
     if (is_fixnum(v)) return BigInt(static_cast<long long>(fixnum_value(v)));
     if (has_tag(v, Tag::Bignum)) return static_cast<Bignum*>(v)->v;
-    error_here("expected integer");
+    internal_error(SourcePos{}, "as_bigint on a non-integer");
 }
 
 static inline ValuePtr car(ValuePtr v) { return as_pair(v)->car; }
@@ -946,7 +984,11 @@ static GcVec<TopForm> read_all(std::uint16_t file_id) {
 // フォーム全体（(let ...) など）を受け取り、その位置つきでエラーにする。
 [[noreturn]] static void syntax_error(std::string_view form, std::string_view what,
                                       ValuePtr whole) {
-    std::string msg = "bad syntax in " + std::string(form) + ":\n  " + std::string(what);
+    // what が既に detail() 形式（"\n  expected: ..."）ならそのまま繋ぎ、
+    // そうでない散文なら1行の詳細として字下げする。
+    std::string msg = "bad syntax in " + std::string(form);
+    msg += (what.compare(0, 3, "\n  ") == 0) ? std::string(what)
+                                            : "\n  " + std::string(what);
     SourcePos pos = nearest_pos(whole);
     if (!pos.known()) {
         // 位置が無い（マクロが作ったフォームなど）ときだけ式そのものを見せる
@@ -955,6 +997,21 @@ static GcVec<TopForm> read_all(std::uint16_t file_id) {
         msg += "\n  in " + shown;
     }
     error_at(pos, msg);
+}
+
+// 「いくつ期待して、いくつ来たか」の詳細行。max_args == 0 は上限なし。
+// 特殊形式（セクション6）とプリミティブ（セクション11）で同じ文面を使う。
+static std::string arity_detail(std::size_t min_args, std::size_t max_args,
+                                std::size_t got) {
+    std::string want;
+    if (max_args == 0)             want = "at least " + std::to_string(min_args);
+    else if (min_args == max_args) want = std::to_string(min_args);
+    else                           want = std::to_string(min_args) + " to " +
+                                          std::to_string(max_args);
+    // 「1 argument」「at least 1 argument」は単数。範囲を言うときは複数。
+    bool singular = (min_args == 1 && (max_args == 1 || max_args == 0));
+    want += singular ? " argument" : " arguments";
+    return expected_given(want, std::to_string(got));
 }
 
 // 真リストの長さ。ドットリスト（不正な形）なら nullopt。
@@ -977,27 +1034,24 @@ static std::optional<std::size_t> form_arity(ValuePtr rest) {
 static void check_arity(std::string_view form, ValuePtr whole, ValuePtr rest,
                         std::size_t min_args, std::size_t max_args) {
     auto n = form_arity(rest);
-    if (!n) syntax_error(form, "improper argument list", whole);
-    std::string what = "expects ";
-    if (max_args == 0)            what += "at least " + std::to_string(min_args);
-    else if (min_args == max_args) what += "exactly " + std::to_string(min_args);
-    else                           what += std::to_string(min_args) + " to " +
-                                           std::to_string(max_args);
-    what += " argument(s), got " + std::to_string(*n);
+    if (!n) syntax_error(form, "the argument list is improper or circular", whole);
     if (*n < min_args || (max_args != 0 && *n > max_args))
-        syntax_error(form, what, whole);
+        syntax_error(form, arity_detail(min_args, max_args, *n), whole);
 }
 
 // (let ((var expr) ...) ...) 系の束縛リストを検証する。
 static void check_bindings(std::string_view form, ValuePtr whole, ValuePtr bindings) {
     if (!is_nil(bindings) && !is_pair(bindings))
-        syntax_error(form, "bindings must be a list", whole);
+        syntax_error(form, expected_given("a list of bindings", to_string(bindings)), whole);
     for (ValuePtr b = bindings; !is_nil(b); b = as_pair(b)->cdr) {
-        if (!is_pair(b)) syntax_error(form, "improper binding list", whole);
+        if (!is_pair(b))
+            syntax_error(form, expected_given("a proper list of bindings",
+                                              to_string(bindings)), whole);
         ValuePtr one = as_pair(b)->car;
         if (!is_pair(one) || !is_symbol(as_pair(one)->car) ||
             !is_pair(as_pair(one)->cdr) || !is_nil(as_pair(as_pair(one)->cdr)->cdr))
-            syntax_error(form, "each binding must be (variable expression)", whole);
+            syntax_error(form, expected_given("each binding to be (variable expression)",
+                                              to_string(one)), whole);
     }
 }
 
@@ -1033,9 +1087,13 @@ static ValueVec list_to_vector(ValuePtr ls, std::string_view who) {
         out.push_back(as_pair(fast)->car);
         fast = as_pair(fast)->cdr;
         slow = as_pair(slow)->cdr;
-        if (fast == slow) error_at(nearest_pos(ls), std::string(who) + ": circular list");
+        if (fast == slow)
+            error_at(nearest_pos(ls), std::string(who) + ": wrong type of argument" +
+                                      expected_given("a proper list", "a circular list"));
     }
-    if (!is_nil(fast)) error_at(nearest_pos(ls), std::string(who) + ": expected proper list");
+    if (!is_nil(fast))
+        error_at(nearest_pos(ls), std::string(who) + ": wrong type of argument" +
+                                  expected_given("a proper list", to_string(ls)));
     return out;
 }
 
@@ -1197,10 +1255,13 @@ static ValuePtr expand_cond(ValuePtr form) {
 
     ValuePtr cur = cdr(form);
     for (; !is_nil(cur); cur = as_pair(cur)->cdr) {
-        if (!is_pair(cur)) syntax_error("cond", "improper clause list", form);
+        if (!is_pair(cur))
+            syntax_error("cond", expected_given("a proper list of clauses",
+                                                to_string(cdr(form))), form);
         ValuePtr cl = as_pair(cur)->car;
         if (!is_pair(cl))
-            syntax_error("cond", "each clause must be (test expression ...)", form);
+            syntax_error("cond", expected_given("each clause to be (test expression ...)",
+                                                to_string(cl)), form);
         Clause c{car(cl), cdr(cl), nullptr, is_symbol_named(car(cl), "else")};
         // 本体のない節 (test) は値そのものを返すので、一時変数が要る
         if (!c.is_else && is_nil(c.body)) c.temp = make_gensym("cond");
@@ -1236,10 +1297,14 @@ static ValuePtr expand_case(ValuePtr form) {
 
     ValueVec cond_clauses;
     for (ValuePtr cur = clauses; !is_nil(cur); cur = as_pair(cur)->cdr) {
-        if (!is_pair(cur)) syntax_error("case", "improper clause list", form);
+        if (!is_pair(cur))
+            syntax_error("case", expected_given("a proper list of clauses",
+                                                to_string(clauses)), form);
         ValuePtr cl = as_pair(cur)->car;
         if (!is_pair(cl))
-            syntax_error("case", "each clause must be ((datum ...) expression ...)", form);
+            syntax_error("case",
+                         expected_given("each clause to be ((datum ...) expression ...)",
+                                        to_string(cl)), form);
         ValuePtr head = car(cl);
         ValueVec one;
         if (is_symbol_named(head, "else")) {
@@ -1270,12 +1335,14 @@ static ValuePtr expand_do(ValuePtr form) {
     ValuePtr test_form = car(cdr(rest));
     ValuePtr body      = cdr(cdr(rest));
     if (!is_pair(test_form))
-        syntax_error("do", "test clause must be (test expression ...)", form);
+        syntax_error("do", expected_given("the test clause to be (test expression ...)",
+                                          to_string(test_form)), form);
 
     ValueVec vars, inits, steps;
     for (ValuePtr v : list_to_vector(var_form, "do")) {
         if (!is_pair(v) || !is_symbol(car(v)) || !is_pair(cdr(v)))
-            syntax_error("do", "each spec must be (variable init [step])", form);
+            syntax_error("do", expected_given("each spec to be (variable init [step])",
+                                              to_string(v)), form);
         vars.push_back(car(v));
         inits.push_back(car(cdr(v)));
         ValuePtr step_tail = cdr(cdr(v));
@@ -1330,14 +1397,18 @@ static ValuePtr qq_transfer(ValuePtr x) {
         // リストが黙って出来てしまう。R5RS では `(unquote v) と ,v は等価。
         if (is_symbol_named(a, "unquote")) {
             if (!is_pair(as_pair(cur)->cdr))
-                error_at(nearest_pos(cur), "quasiquote: malformed unquote");
+                error_at(nearest_pos(cur), "bad syntax in quasiquote" +
+                                           expected_given("(unquote expression)",
+                                                          to_string(cur)));
             tail = car(as_pair(cur)->cdr);
             break;
         }
         // `(a . ,@v) は R5RS で不正。黙って壊れた結果を返さずに知らせる。
         if (is_symbol_named(a, "splice"))
             error_at(nearest_pos(cur),
-                     "quasiquote: unquote-splicing is not allowed in dotted tail position");
+                     "bad syntax in quasiquote" +
+                     detail("note", "unquote-splicing (,@) is not allowed in the tail "
+                                    "position of a dotted list"));
 
         if (is_pair(a) && is_symbol_named(car(a), "unquote"))
             steps.push_back(Step{false, car(cdr(a))});
@@ -1873,7 +1944,8 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
         check_arity("set!", expr, rest, 2, 2);
         ValuePtr target = car(rest);
         if (!is_symbol(target))
-            syntax_error("set!", "assignment target must be a symbol", expr);
+            syntax_error("set!", expected_given("the assignment target to be a symbol",
+                                                to_string(target)), expr);
         comp(car(cdr(rest)), env, code, false, pos);
         std::string_view name = view_of(as_symbol_name(target));
         std::uint16_t f = 0, idx = 0;
@@ -1969,17 +2041,21 @@ static CodePtr compile_top(ValuePtr expr, SourcePos pos = SourcePos{}) {
 static bool g_trace_mode = false;
 
 // 引数の並び（スタック上の [argp, argp+n) 区間）から環境フレームを作る。
+// エラー本文で手続きを名指しするときの呼び名。define で名前が付いていれば
+// それを使い、無名なら表示形（#<closure:(x y)>）で代用する。表示形そのものは
+// §2.1 で凍結されていて名前を含められないので、ここで別に持ち出す。
+static std::string callee_name(const Closure* clo) {
+    if (!clo->tmpl->name.empty()) return to_std(clo->tmpl->name);
+    return to_string(const_cast<Closure*>(clo));
+}
+
 static Env* make_frame(Closure* clo, ValuePtr* argv, std::size_t n, const SourcePos& pos) {
     const Template* t = clo->tmpl;
     std::size_t fixed = t->params.size();
 
-    if (!t->rest) {
-        if (n != fixed)
-            error_at(pos, "arity mismatch: " + to_string(clo) + " expects " +
-                          std::to_string(fixed) + " argument(s), got " + std::to_string(n));
-    } else if (n < fixed) {
-        error_at(pos, "arity mismatch: " + to_string(clo) + " expects at least " +
-                      std::to_string(fixed) + " argument(s), got " + std::to_string(n));
+    if (!t->rest ? (n != fixed) : (n < fixed)) {
+        error_at(pos, callee_name(clo) + ": wrong number of arguments" +
+                      arity_detail(fixed, t->rest ? 0 : fixed, n));
     }
 
     // 余りのリストを先に作る（確保は GC を動かしうるが、argv はスタック上で生きている）
@@ -2073,13 +2149,14 @@ struct VM {
                 return;
             }
             default:
-                error_at(ins.pos, "attempt to call a non-procedure: " + to_string(callee));
+                error_at(ins.pos, "attempt to call a non-procedure" +
+                                  expected_given("a procedure", to_string(callee)));
         }
     }
 
     ValuePtr run() {
         for (;;) {
-            if (!c || pc >= c->ins.size()) error_here("code exhausted without STOP");
+            if (!c || pc >= c->ins.size()) internal_error(SourcePos{}, "code exhausted without reaching STOP");
             const Instruction& ins = c->ins[pc++];
             if (g_trace_mode) trace_step(ins);
 
@@ -2090,7 +2167,7 @@ struct VM {
             switch (ins.op) {
                 case Op::LD: {
                     Env* f = env_at(env, ins.a);
-                    if (!f || ins.b >= f->size) error_at(ins.pos, "LD: variable out of range");
+                    if (!f || ins.b >= f->size) internal_error(ins.pos, "LD: local variable index out of range");
                     stack.push_back(f->vals[ins.b]);
                     break;
                 }
@@ -2100,7 +2177,9 @@ struct VM {
                 case Op::LDG: {
                     GlobalCell* cell = ins.cell();
                     if (!cell->value)
-                        error_at(ins.pos, "unbound global: " + to_std(cell->name));
+                        error_at(ins.pos, "unbound variable: " + to_std(cell->name) +
+                                          detail("note", "it is referenced here but never "
+                                                         "defined by define or set!"));
                     stack.push_back(cell->value);
                     break;
                 }
@@ -2111,7 +2190,7 @@ struct VM {
                 case Op::APP:
                 case Op::TAPP: {
                     std::size_t n = ins.a;
-                    if (stack.size() < n + 1) error_at(ins.pos, "APP: stack underflow");
+                    if (stack.size() < n + 1) internal_error(ins.pos, "APP: operand stack underflow");
                     ValuePtr callee = stack.back();
                     stack.pop_back();
                     do_call(callee, stack.size() - n, n, ins, ins.op == Op::TAPP);
@@ -2121,7 +2200,7 @@ struct VM {
                 // (apply f a b ... lst) の引数まとめ。ここだけリストを作る。
                 case Op::ARGS_AP: {
                     std::size_t k = ins.a;
-                    if (k == 0 || stack.size() < k) error_at(ins.pos, "ARGS-AP: stack underflow");
+                    if (k == 0 || stack.size() < k) internal_error(ins.pos, "ARGS-AP: operand stack underflow");
                     ValuePtr tail = stack.back();
                     stack.pop_back();
                     ValueVec acc = list_to_vector(tail, "apply");
@@ -2133,7 +2212,7 @@ struct VM {
                 }
                 case Op::APPLY:
                 case Op::TAPPLY: {
-                    if (stack.size() < 2) error_at(ins.pos, "APPLY: stack underflow");
+                    if (stack.size() < 2) internal_error(ins.pos, "APPLY: operand stack underflow");
                     ValuePtr callee = stack.back(); stack.pop_back();
                     ValuePtr lst    = stack.back(); stack.pop_back();
                     ValueVec args = list_to_vector(lst, "apply");
@@ -2156,17 +2235,17 @@ struct VM {
 
                 case Op::SEL:
                 case Op::SELR: {
-                    if (stack.empty()) error_at(ins.pos, "SEL: stack underflow");
+                    if (stack.empty()) internal_error(ins.pos, "SEL: operand stack underflow");
                     ValuePtr cond = stack.back();
                     stack.pop_back();
                     CodePtr next = is_true(cond) ? ins.code_true() : ins.code_false();
-                    if (!next) error_at(ins.pos, "SEL: missing branch");
+                    if (!next) internal_error(ins.pos, "SEL: missing branch");
                     if (ins.op == Op::SEL) dump.push_back(DumpEntry{c, pc, env, base});
                     c = next; pc = 0;
                     break;
                 }
                 case Op::JOIN: {
-                    if (dump.empty()) error_at(ins.pos, "JOIN: dump underflow");
+                    if (dump.empty()) internal_error(ins.pos, "JOIN: dump underflow");
                     DumpEntry back = dump.back();
                     dump.pop_back();
                     c = back.c; pc = back.pc;   // env と base は変わっていない
@@ -2174,19 +2253,19 @@ struct VM {
                 }
 
                 case Op::POP:
-                    if (stack.empty()) error_at(ins.pos, "POP: stack underflow");
+                    if (stack.empty()) internal_error(ins.pos, "POP: operand stack underflow");
                     stack.pop_back();
                     break;
 
                 case Op::DEF: {
-                    if (stack.empty()) error_at(ins.pos, "DEF: stack underflow");
+                    if (stack.empty()) internal_error(ins.pos, "DEF: operand stack underflow");
                     GlobalCell* cell = ins.cell();
                     cell->value = stack.back();
                     stack.back() = make_symbol(view_of(cell->name));   // define はシンボルを返す
                     break;
                 }
                 case Op::DEFM: {
-                    if (stack.empty()) error_at(ins.pos, "DEFM: stack underflow");
+                    if (stack.empty()) internal_error(ins.pos, "DEFM: operand stack underflow");
                     GlobalCell* cell = ins.cell();
                     ValuePtr v = stack.back();
                     cell->macro = v;
@@ -2197,20 +2276,20 @@ struct VM {
                     break;
                 }
                 case Op::LSET: {
-                    if (stack.empty()) error_at(ins.pos, "LSET: stack underflow");
+                    if (stack.empty()) internal_error(ins.pos, "LSET: operand stack underflow");
                     Env* f = env_at(env, ins.a);
-                    if (!f || ins.b >= f->size) error_at(ins.pos, "LSET: variable out of range");
+                    if (!f || ins.b >= f->size) internal_error(ins.pos, "LSET: local variable index out of range");
                     f->vals[ins.b] = stack.back();   // set! は代入した値を返す
                     break;
                 }
                 case Op::GSET:
-                    if (stack.empty()) error_at(ins.pos, "GSET: stack underflow");
+                    if (stack.empty()) internal_error(ins.pos, "GSET: operand stack underflow");
                     ins.cell()->value = stack.back();
                     break;
 
                 case Op::CALLCC:
                 case Op::TCALLCC: {
-                    if (stack.empty()) error_at(ins.pos, "call/cc: stack underflow");
+                    if (stack.empty()) internal_error(ins.pos, "call/cc: operand stack underflow");
                     ValuePtr proc = stack.back();
                     stack.pop_back();
 
@@ -2243,7 +2322,8 @@ static ValuePtr apply_callable(ValuePtr proc, ValuePtr* argv, std::size_t argc) 
         return out ? out : g_nil;
     }
     if (!has_tag(proc, Tag::Closure))
-        error_here("macro transformer is not callable: " + to_string(proc));
+        error_here("macro transformer is not callable" +
+                   expected_given("a procedure", to_string(proc)));
 
     Closure* clo = static_cast<Closure*>(proc);
     VM vm;
@@ -2273,51 +2353,75 @@ static ValuePtr eval_top(ValuePtr expr, SourcePos pos = SourcePos{}) {
 // 収まったら必ず fixnum に落とす**（make_int がやる）。これを破ると §2.2 の
 // 「数値は値比較」が表現によってぶれる（dev_memo.md §9）。
 
+// プリミティブのエラーは3種類しかない。それぞれ専用の入口を持たせ、
+// 文面を各プリミティブに組み立てさせない（§4.2 / 決定33）。
+//
+//   prim_error       見出しだけで足りるもの（division by zero など）
+//   prim_type_error  型が違う      → expected: / given:
+//   prim_range_error 範囲外の添字  → expected: / given:
+//
+// 位置は付けない。VM が実行中の命令の位置を後から埋める（セクション10 の
+// catch）。プリミティブ側は「誰が何を期待したか」だけを知っていればよい。
+
 [[noreturn]] static void prim_error(std::string_view who, std::string_view what) {
     error_here(std::string(who) + ": " + std::string(what));
 }
 
+[[noreturn]] static void prim_type_error(std::string_view who, std::string_view expected,
+                                         ValuePtr got) {
+    error_here(std::string(who) + ": wrong type of argument" +
+               expected_given(expected, to_string(got)));
+}
+
+// 添字が [0, limit) に入らなかった。what は冠詞込みの語（"an element index"）、
+// subject は入れ物の呼び名（"vector"）。limit == 0（空の入れ物）に
+// 「0 から -1 まで」と言わせないために、空のときは別の文にする。
+[[noreturn]] static void prim_range_error(std::string_view who, std::string_view what,
+                                          std::string_view subject,
+                                          long long got, long long limit) {
+    std::string want = (limit <= 0)
+        ? (std::string(what) + ", but the " + std::string(subject) + " is empty")
+        : (std::string(what) + " from 0 to " + std::to_string(limit - 1));
+    error_here(std::string(who) + ": index out of range" +
+               expected_given(want, std::to_string(got)));
+}
+
 static void need_args(const char* who, std::size_t argc, std::size_t lo, std::size_t hi) {
-    if (argc < lo || (hi != 0 && argc > hi)) {
-        std::string what = "expects ";
-        if (hi == 0)      what += "at least " + std::to_string(lo);
-        else if (lo == hi) what += "exactly " + std::to_string(lo);
-        else               what += std::to_string(lo) + " to " + std::to_string(hi);
-        what += " argument(s), got " + std::to_string(argc);
-        prim_error(who, what);
-    }
+    if (argc < lo || (hi != 0 && argc > hi))
+        error_here(std::string(who) + ": wrong number of arguments" +
+                   arity_detail(lo, hi, argc));
 }
 
 static BigInt num_of(ValuePtr v, const char* who) {
     if (is_fixnum(v)) return BigInt(static_cast<long long>(fixnum_value(v)));
     if (has_tag(v, Tag::Bignum)) return static_cast<Bignum*>(v)->v;
-    prim_error(who, "expected integer, got " + to_string(v));
+    prim_type_error(who, "an integer", v);
 }
 
 static long long ll_of(ValuePtr v, const char* who) {
     if (is_fixnum(v)) return static_cast<long long>(fixnum_value(v));
     BigInt n = num_of(v, who);
     if (n > BigInt(LLONG_MAX) || n < BigInt(LLONG_MIN))
-        prim_error(who, "integer out of range for conversion");
+        prim_error(who, "integer too large to be used here" +
+                        detail("given", to_string(v)));
     return static_cast<long long>(n);
 }
 
 static GcString& str_of(ValuePtr v, const char* who) {
-    if (!is_string(v)) prim_error(who, "expected string, got " + to_string(v));
+    if (!is_string(v)) prim_type_error(who, "a string", v);
     return static_cast<Str*>(v)->s;
 }
 
 static Vector* vec_of(ValuePtr v, const char* who) {
-    if (!is_vector(v)) prim_error(who, "expected vector, got " + to_string(v));
+    if (!is_vector(v)) prim_type_error(who, "a vector", v);
     return static_cast<Vector*>(v);
 }
 
 static Port* port_of(ValuePtr v, const char* who, bool want_input) {
-    if (!has_tag(v, Tag::Port)) prim_error(who, "expected port, got " + to_string(v));
+    if (!has_tag(v, Tag::Port)) prim_type_error(who, "a port", v);
     Port* p = static_cast<Port*>(v);
     if (p->is_closed || !p->fp || p->is_input != want_input)
-        prim_error(who, want_input ? "port is not an open input port"
-                                   : "port is not an open output port");
+        prim_type_error(who, want_input ? "an open input port" : "an open output port", v);
     return p;
 }
 
@@ -2392,7 +2496,7 @@ static ValuePtr prim_div(ValuePtr* a, std::size_t n) {
     BigInt acc = num_of(a[0], "/");
     for (std::size_t i = 1; i < n; ++i) {
         BigInt d = num_of(a[i], "/");
-        if (d == 0) prim_error("/", "division by zero");
+        if (d == 0) prim_error("/", "division by zero" + detail("given", to_string(a[i])));
         acc /= d;
     }
     return make_int(acc);
@@ -2403,7 +2507,7 @@ static ValuePtr prim_modulo(ValuePtr* a, std::size_t n) {
     need_args("modulo", n, 2, 2);
     BigInt x = num_of(a[0], "modulo");
     BigInt y = num_of(a[1], "modulo");
-    if (y == 0) prim_error("modulo", "modulo by zero");
+    if (y == 0) prim_error("modulo", "division by zero" + detail("given", to_string(a[1])));
     BigInt r = x % y;
     if ((r < 0 && y > 0) || (r > 0 && y < 0)) r += y;
     return make_int(r);
@@ -2443,23 +2547,23 @@ static ValuePtr prim_cons(ValuePtr* a, std::size_t n) {
 }
 static ValuePtr prim_car(ValuePtr* a, std::size_t n) {
     need_args("car", n, 1, 1);
-    if (!is_pair(a[0])) prim_error("car", "expected pair, got " + to_string(a[0]));
+    if (!is_pair(a[0])) prim_type_error("car", "a pair", a[0]);
     return as_pair(a[0])->car;
 }
 static ValuePtr prim_cdr(ValuePtr* a, std::size_t n) {
     need_args("cdr", n, 1, 1);
-    if (!is_pair(a[0])) prim_error("cdr", "expected pair, got " + to_string(a[0]));
+    if (!is_pair(a[0])) prim_type_error("cdr", "a pair", a[0]);
     return as_pair(a[0])->cdr;
 }
 static ValuePtr prim_set_car(ValuePtr* a, std::size_t n) {
     need_args("set-car!", n, 2, 2);
-    if (!is_pair(a[0])) prim_error("set-car!", "expected pair");
+    if (!is_pair(a[0])) prim_type_error("set-car!", "a pair", a[0]);
     as_pair(a[0])->car = a[1];
     return a[1];
 }
 static ValuePtr prim_set_cdr(ValuePtr* a, std::size_t n) {
     need_args("set-cdr!", n, 2, 2);
-    if (!is_pair(a[0])) prim_error("set-cdr!", "expected pair");
+    if (!is_pair(a[0])) prim_type_error("set-cdr!", "a pair", a[0]);
     as_pair(a[0])->cdr = a[1];
     return a[1];
 }
@@ -2468,7 +2572,7 @@ static ValuePtr prim_set_cdr(ValuePtr* a, std::size_t n) {
 static ValuePtr cxr(ValuePtr v, const char* path, const char* who) {
     for (const char* p = path + std::strlen(path); p != path; --p) {
         char op = *(p - 1);
-        if (!is_pair(v)) prim_error(who, "expected pair, got " + to_string(v));
+        if (!is_pair(v)) prim_type_error(who, "a pair", v);
         v = (op == 'a') ? as_pair(v)->car : as_pair(v)->cdr;
     }
     return v;
@@ -2508,7 +2612,7 @@ static ValuePtr prim_list(ValuePtr* a, std::size_t n) {
 }
 static ValuePtr prim_length(ValuePtr* a, std::size_t n) {
     need_args("length", n, 1, 1);
-    if (!is_proper_list(a[0])) prim_error("length", "expected proper list");
+    if (!is_proper_list(a[0])) prim_type_error("length", "a proper list", a[0]);
     long long k = 0;
     for (ValuePtr ls = a[0]; !is_nil(ls); ls = as_pair(ls)->cdr) ++k;
     return make_int(k);
@@ -2522,7 +2626,7 @@ static ValuePtr prim_append(ValuePtr* a, std::size_t n) {
     ValueVec elems;
     for (std::size_t i = 0; i + 1 < n; ++i) {          // 最後の1つ以外を平らに集める
         for (ValuePtr ls = a[i]; !is_nil(ls); ls = as_pair(ls)->cdr) {
-            if (!is_pair(ls)) prim_error("append", "expected list");
+            if (!is_pair(ls)) prim_type_error("append", "a proper list", a[i]);
             elems.push_back(as_pair(ls)->car);
         }
     }
@@ -2601,7 +2705,7 @@ static ValuePtr prim_equal(ValuePtr* a, std::size_t n) {
 static ValuePtr prim_memq(ValuePtr* a, std::size_t n) {
     need_args("memq", n, 2, 2);
     for (ValuePtr ls = a[1]; !is_nil(ls); ls = as_pair(ls)->cdr) {
-        if (!is_pair(ls)) prim_error("memq", "expected proper list");
+        if (!is_pair(ls)) prim_type_error("memq", "a proper list", a[1]);
         if (eqv_values(as_pair(ls)->car, a[0])) return ls;
     }
     return g_false;
@@ -2609,7 +2713,7 @@ static ValuePtr prim_memq(ValuePtr* a, std::size_t n) {
 static ValuePtr prim_assq(ValuePtr* a, std::size_t n) {
     need_args("assq", n, 2, 2);
     for (ValuePtr ls = a[1]; !is_nil(ls); ls = as_pair(ls)->cdr) {
-        if (!is_pair(ls)) prim_error("assq", "expected proper alist");
+        if (!is_pair(ls)) prim_type_error("assq", "a proper association list", a[1]);
         ValuePtr e = as_pair(ls)->car;
         if (is_pair(e) && eqv_values(as_pair(e)->car, a[0])) return e;
     }
@@ -2650,28 +2754,32 @@ static ValuePtr prim_string_ref(ValuePtr* a, std::size_t n) {
     GcString& s = str_of(a[0], "string-ref");
     long long i = ll_of(a[1], "string-ref");
     if (i < 0 || static_cast<std::size_t>(i) >= s.size())
-        prim_error("string-ref", "index out of range");
+        prim_range_error("string-ref", "a character index", "string", i,
+                         static_cast<long long>(s.size()));
     return make_string(std::string_view(&s[static_cast<std::size_t>(i)], 1));
 }
 static ValuePtr prim_string_set(ValuePtr* a, std::size_t n) {
     need_args("string-set!", n, 3, 3);
     GcString& s  = str_of(a[0], "string-set!");
     GcString& ch = str_of(a[2], "string-set!");
-    if (ch.empty()) prim_error("string-set!", "empty char string");
+    if (ch.empty()) prim_type_error("string-set!", "a character (a string of length 1)", a[2]);
     long long i = ll_of(a[1], "string-set!");
     if (i < 0 || static_cast<std::size_t>(i) >= s.size())
-        prim_error("string-set!", "index out of range");
+        prim_range_error("string-set!", "a character index", "string", i,
+                         static_cast<long long>(s.size()));
     s[static_cast<std::size_t>(i)] = ch[0];
     return make_symbol(":undef");
 }
 static ValuePtr prim_make_string(ValuePtr* a, std::size_t n) {
     need_args("make-string", n, 1, 2);
     long long len = ll_of(a[0], "make-string");
-    if (len < 0 || len > 1000000) prim_error("make-string", "length out of reasonable range");
+    if (len < 0 || len > 1000000)
+        prim_error("make-string", "argument out of range" +
+                   expected_given("a length from 0 to 1000000", std::to_string(len)));
     char fill = ' ';
     if (n == 2) {
         GcString& f = str_of(a[1], "make-string");
-        if (f.empty()) prim_error("make-string", "empty fill char");
+        if (f.empty()) prim_type_error("make-string", "a character (a string of length 1)", a[1]);
         fill = f[0];
     }
     return make_string(std::string(static_cast<std::size_t>(len), fill));
@@ -2686,12 +2794,17 @@ static ValuePtr prim_substring(ValuePtr* a, std::size_t n) {
     GcString& s = str_of(a[0], "substring");
     long long from = ll_of(a[1], "substring");
     if (from < 0 || static_cast<std::size_t>(from) > s.size())
-        prim_error("substring", "start index out of range");
+        prim_error("substring", "index out of range" +
+                   expected_given("a start index from 0 to " + std::to_string(s.size()),
+                                  std::to_string(from)));
     long long to = static_cast<long long>(s.size());
     if (n == 3) {
         to = ll_of(a[2], "substring");
         if (to < from || static_cast<std::size_t>(to) > s.size())
-            prim_error("substring", "end index out of range");
+            prim_error("substring", "index out of range" +
+                       expected_given("an end index from " + std::to_string(from) +
+                                      " to " + std::to_string(s.size()),
+                                      std::to_string(to)));
     }
     return new Str(s.substr(static_cast<std::size_t>(from),
                             static_cast<std::size_t>(to - from)));
@@ -2712,13 +2825,15 @@ DEFINE_STRCMP(prim_string_ge, "string>=?", c >= 0)
 static ValuePtr prim_char_to_integer(ValuePtr* a, std::size_t n) {
     need_args("char->integer", n, 1, 1);
     GcString& s = str_of(a[0], "char->integer");
-    if (s.empty()) prim_error("char->integer", "empty string");
+    if (s.empty()) prim_type_error("char->integer", "a character (a string of length 1)", a[0]);
     return make_int(static_cast<long long>(static_cast<unsigned char>(s[0])));
 }
 static ValuePtr prim_integer_to_char(ValuePtr* a, std::size_t n) {
     need_args("integer->char", n, 1, 1);
     long long v = ll_of(a[0], "integer->char");
-    if (v < 0 || v > 127) prim_error("integer->char", "value out of ASCII range");
+    if (v < 0 || v > 127)
+        prim_error("integer->char", "argument out of range" +
+                   expected_given("an ASCII code from 0 to 127", std::to_string(v)));
     char c = static_cast<char>(v);
     return make_string(std::string_view(&c, 1));
 }
@@ -2734,7 +2849,7 @@ static ValuePtr prim_list_to_string(ValuePtr* a, std::size_t n) {
     need_args("list->string", n, 1, 1);
     GcString out;
     for (ValuePtr ls = a[0]; !is_nil(ls); ls = as_pair(ls)->cdr) {
-        if (!is_pair(ls)) prim_error("list->string", "not a proper list");
+        if (!is_pair(ls)) prim_type_error("list->string", "a proper list", a[0]);
         GcString& ch = str_of(as_pair(ls)->car, "list->string");
         if (!ch.empty()) out += ch[0];
     }
@@ -2768,7 +2883,9 @@ static ValuePtr prim_string_to_number(ValuePtr* a, std::size_t n) {
 static ValuePtr prim_make_vector(ValuePtr* a, std::size_t n) {
     need_args("make-vector", n, 1, 2);
     long long len = ll_of(a[0], "make-vector");
-    if (len < 0) prim_error("make-vector", "negative length");
+    if (len < 0)
+        prim_error("make-vector", "argument out of range" +
+                   expected_given("a length of 0 or more", std::to_string(len)));
     return make_vector(static_cast<std::size_t>(len), n == 2 ? a[1] : g_nil);
 }
 static ValuePtr prim_vector(ValuePtr* a, std::size_t n) {
@@ -2785,7 +2902,8 @@ static ValuePtr prim_vector_ref(ValuePtr* a, std::size_t n) {
     Vector* v = vec_of(a[0], "vector-ref");
     long long i = ll_of(a[1], "vector-ref");
     if (i < 0 || static_cast<std::size_t>(i) >= v->elems.size())
-        prim_error("vector-ref", "index out of range");
+        prim_range_error("vector-ref", "an element index", "vector", i,
+                         static_cast<long long>(v->elems.size()));
     return v->elems[static_cast<std::size_t>(i)];
 }
 static ValuePtr prim_vector_set(ValuePtr* a, std::size_t n) {
@@ -2793,7 +2911,8 @@ static ValuePtr prim_vector_set(ValuePtr* a, std::size_t n) {
     Vector* v = vec_of(a[0], "vector-set!");
     long long i = ll_of(a[1], "vector-set!");
     if (i < 0 || static_cast<std::size_t>(i) >= v->elems.size())
-        prim_error("vector-set!", "index out of range");
+        prim_range_error("vector-set!", "an element index", "vector", i,
+                         static_cast<long long>(v->elems.size()));
     v->elems[static_cast<std::size_t>(i)] = a[2];
     return make_symbol(":undef");
 }
@@ -2856,7 +2975,7 @@ static ValuePtr prim_newline(ValuePtr* a, std::size_t n) {
 static ValuePtr prim_write_char(ValuePtr* a, std::size_t n) {
     need_args("write-char", n, 2, 2);
     GcString& s = str_of(a[0], "write-char");
-    if (s.empty()) prim_error("write-char", "empty string");
+    if (s.empty()) prim_type_error("write-char", "a character (a string of length 1)", a[0]);
     std::FILE* out = port_of(a[1], "write-char", false)->fp;
     std::fputc(s[0], out);
     return a[0];
@@ -2865,19 +2984,21 @@ static ValuePtr prim_open_input_file(ValuePtr* a, std::size_t n) {
     need_args("open-input-file", n, 1, 1);
     std::string path = to_std(str_of(a[0], "open-input-file"));
     std::FILE* fp = fopen_with_gc_retry(path.c_str(), "rb");
-    if (!fp) prim_error("open-input-file", "cannot open file: " + path);
+    if (!fp) prim_error("open-input-file", "cannot open file for reading" +
+                        detail("given", path));
     return make_port(fp, true);
 }
 static ValuePtr prim_open_output_file(ValuePtr* a, std::size_t n) {
     need_args("open-output-file", n, 1, 1);
     std::string path = to_std(str_of(a[0], "open-output-file"));
     std::FILE* fp = fopen_with_gc_retry(path.c_str(), "wb");
-    if (!fp) prim_error("open-output-file", "cannot open file: " + path);
+    if (!fp) prim_error("open-output-file", "cannot open file for writing" +
+                        detail("given", path));
     return make_port(fp, false);
 }
 static ValuePtr prim_close_port(ValuePtr* a, std::size_t n) {
     need_args("close-port", n, 1, 1);
-    if (!has_tag(a[0], Tag::Port)) prim_error("close-port", "expected port");
+    if (!has_tag(a[0], Tag::Port)) prim_type_error("close-port", "a port", a[0]);
     static_cast<Port*>(a[0])->close();
     return g_true;
 }
@@ -2965,7 +3086,9 @@ static ValuePtr prim_random(ValuePtr* a, std::size_t n) {
     need_args("random", n, 1, 1);
     random_init();
     long long hi = ll_of(a[0], "random");
-    if (hi <= 0) prim_error("random", "argument must be positive");
+    if (hi <= 0)
+        prim_error("random", "argument out of range" +
+                   expected_given("a positive upper bound", std::to_string(hi)));
     std::uniform_int_distribution<long long> dist(0, hi - 1);
     return make_int(dist(g_random_engine));
 }
@@ -3053,6 +3176,42 @@ static ValuePtr prim_disassemble(ValuePtr* a, std::size_t n) {
                 params.c_str(), disassemble(clo->tmpl->body).c_str(), depth);
     return make_symbol(":disassembled");
 }
+// --- 展開の観察（7日目。§8 の4番目 / micro_scheme8_notes.md §6.2）-----------
+//
+// 原典 micro_Scheme8.lisp にあって scheme12 で失われていた道具。展開器と
+// コンパイラは既に持っているので、**外に出すだけ**で入る。
+//
+// 1段の順序は **コンパイラと同じ**にする（セクション8 の comp を参照）。
+// 特殊形式の書き換えが先、ユーザマクロが後。ここを違えると、この道具で
+// 見た展開と実際にコンパイルされる展開がずれて、道具の意味が無くなる。
+static ValuePtr expand_one_step(ValuePtr form) {
+    ValuePtr out = expand_form_1(form);
+    if (out != form) return out;
+    return macro_expand_1_expr(form);
+}
+
+static ValuePtr prim_macroexpand_1(ValuePtr* a, std::size_t n) {
+    need_args("macroexpand-1", n, 1, 1);
+    return expand_one_step(a[0]);
+}
+
+// 動かなくなるまで**外側だけ**を繰り返し展開する（CL の macroexpand と同じ。
+// 部分式へは降りない）。自分自身を作り直すマクロで止まらなくなるのを防ぐため
+// 上限を置く。上限は「人が書いた展開の段数」としては十分に大きく、
+// 暴走を見つけるには十分に小さい値。
+static ValuePtr prim_macroexpand(ValuePtr* a, std::size_t n) {
+    need_args("macroexpand", n, 1, 1);
+    ValuePtr form = a[0];
+    for (int steps = 0; steps < 1000; ++steps) {
+        ValuePtr out = expand_one_step(form);
+        if (out == form) return form;
+        form = out;
+    }
+    prim_error("macroexpand", "expansion did not terminate" +
+               detail("note", "the outermost form still expands after 1000 steps; "
+                              "a macro is probably expanding into itself"));
+}
+
 static ValuePtr prim_globals(ValuePtr*, std::size_t) {
     RootVec<std::string_view> names;
     for (auto& kv : g_globals) if (kv.second->value) names.push_back(kv.first);
@@ -3102,6 +3261,10 @@ Inspection:
 Compilation:
   (compile expr)         Compile and show bytecode
   (disassemble closure)  Show closure internals
+
+Expansion:
+  (macroexpand-1 'form)  Expand the form one step, as the compiler would
+  (macroexpand 'form)    Expand the outermost form until it stops changing
 
 Tracing:
   (trace-on)            Enable VM step-by-step trace
@@ -3195,6 +3358,7 @@ static void init_globals() {
         {"compile", prim_compile_show}, {"disassemble", prim_disassemble},
         {"trace-on", prim_trace_on}, {"trace-off", prim_trace_off},
         {"globals", prim_globals}, {"macros", prim_macros}, {"help", prim_help},
+        {"macroexpand-1", prim_macroexpand_1}, {"macroexpand", prim_macroexpand},
     };
     for (const Entry& e : table) global_define(e.name, make_primitive(e.name, e.fn));
 }
@@ -3205,14 +3369,14 @@ static void init_globals() {
 
 static std::string slurp_file(const std::string& path) {
     std::FILE* in = fopen_with_gc_retry(path.c_str(), "rb");
-    if (!in) error_here("scheme13: cannot open file: " + path);
+    if (!in) error_here("cannot open file for reading" + detail("given", path));
     std::string out;
     char buf[65536];
     std::size_t n;
     while ((n = std::fread(buf, 1, sizeof buf, in)) > 0) out.append(buf, n);
     bool bad = std::ferror(in) != 0;
     std::fclose(in);
-    if (bad) error_here("scheme13: cannot read file: " + path);
+    if (bad) error_here("cannot read file" + detail("given", path));
     return out;
 }
 
@@ -3576,8 +3740,9 @@ static void selftest_expand() {
             check_eq("bad binding", "no error", "error");
         } catch (const SchemeError& e) {
             check_eq("bad binding", format_error(e),
-                     "t.scm:1:1: bad syntax in let:\n"
-                     "  each binding must be (variable expression)\n"
+                     "t.scm:1:1: bad syntax in let\n"
+                     "  expected: each binding to be (variable expression)\n"
+                     "  given: (x)\n"
                      "    (let ((x)) x)\n    ^");
         }
     }
@@ -3589,8 +3754,9 @@ static void selftest_expand() {
             check_eq("do arity", "no error", "error");
         } catch (const SchemeError& e) {
             check_eq("do arity", format_error(e),
-                     "t.scm:1:1: bad syntax in do:\n"
-                     "  expects at least 2 argument(s), got 1\n"
+                     "t.scm:1:1: bad syntax in do\n"
+                     "  expected: at least 2 arguments\n"
+                     "  given: 1\n"
                      "    (do ((i 0)))\n    ^");
         }
     }
@@ -3672,6 +3838,117 @@ static std::string eval_to_string(const std::string& src) {
     ValuePtr last = g_nil;
     for (const TopForm& f : read_all(id)) last = eval_top(f.expr, f.pos);
     return to_string(last);
+}
+
+// 式を評価し、投げられたエラーの本文（位置とキャレット行を除く）を返す。
+// 落ちなかったら "no error"。文面そのものを固定するためのもの。
+static std::string eval_error_body(const std::string& src) {
+    std::uint16_t id = source_intern("<selftest>", src);
+    try {
+        for (const TopForm& f : read_all(id)) eval_top(f.expr, f.pos);
+        return "no error";
+    } catch (const SchemeError& e) {
+        return e.what();
+    }
+}
+
+// エラー本文の形（決定33）。**見出し1行 + 字下げした詳細行**であること、
+// 詳細が expected: / given: の順であること、内部エラーが利用者の誤りと
+// 区別されること。ここが崩れると、読む側が毎回違う場所を探すことになる。
+static void selftest_errors() {
+    check_eq("type error shape",
+             eval_error_body("(car 5)"),
+             "car: wrong type of argument\n  expected: a pair\n  given: 5");
+    check_eq("proper list expected",
+             eval_error_body("(length (cons 1 2))"),
+             "length: wrong type of argument\n  expected: a proper list\n  given: (1 . 2)");
+
+    // クロージャの引数不足は**呼ばれた側の名前**を出す（§8 の1番目）
+    check_eq("arity names the callee",
+             eval_error_body("(define (f a b) a) (f 1)"),
+             "f: wrong number of arguments\n  expected: 2 arguments\n  given: 1");
+    check_eq("arity of anonymous closure",
+             eval_error_body("((lambda (a b) a) 1)"),
+             "#<closure:(a b)>: wrong number of arguments\n"
+             "  expected: 2 arguments\n  given: 1");
+    check_eq("arity with rest",
+             eval_error_body("(define (g a . r) a) (g)"),
+             "g: wrong number of arguments\n"
+             "  expected: at least 1 argument\n  given: 0");
+    check_eq("arity of primitive",
+             eval_error_body("(cons 1)"),
+             "cons: wrong number of arguments\n  expected: 2 arguments\n  given: 1");
+
+    // 添字。空の入れ物に「0 から -1 まで」と言わせない
+    check_eq("index range",
+             eval_error_body("(vector-ref (vector 1 2 3) 7)"),
+             "vector-ref: index out of range\n"
+             "  expected: an element index from 0 to 2\n  given: 7");
+    check_eq("index range on empty",
+             eval_error_body("(vector-ref (vector) 0)"),
+             "vector-ref: index out of range\n"
+             "  expected: an element index, but the vector is empty\n  given: 0");
+    // 値域は添字ではないので見出しを分ける
+    check_eq("argument range",
+             eval_error_body("(integer->char 999)"),
+             "integer->char: argument out of range\n"
+             "  expected: an ASCII code from 0 to 127\n  given: 999");
+
+    check_eq("unbound variable",
+             eval_error_body("(nosuchthing 1)"),
+             "unbound variable: nosuchthing\n"
+             "  note: it is referenced here but never defined by define or set!");
+    check_eq("call a non-procedure",
+             eval_error_body("(5 6)"),
+             "attempt to call a non-procedure\n  expected: a procedure\n  given: 5");
+
+    // §2.3 で凍結した文面。中身は変えない
+    check_eq("single-argument division",
+             eval_error_body("(/ 5)"),
+             "/: requires at least 2 arguments (single-argument reciprocal is not "
+             "supported; use (/ 1 x) instead)");
+
+    // 処理系自身の不変条件が壊れた場合は、利用者の誤りと明示的に分ける
+    try {
+        as_pair(g_nil);
+        check_eq("internal error is labelled", "no error", "error");
+    } catch (const SchemeError& e) {
+        check_eq("internal error is labelled", e.what(),
+                 "internal error: as_pair on a non-pair\n"
+                 "  note: this is a bug in scheme13 itself, "
+                 "not in the program being run");
+    }
+}
+
+// 展開を外から観察する道具（決定34）。**コンパイラと同じ1段**を見せること。
+static void selftest_macroexpand() {
+    check_eq("macroexpand-1 on a special form",
+             eval_to_string("(macroexpand-1 '(let ((x 1)) x))"),
+             "((lambda (x) x) 1)");
+    check_eq("macroexpand-1 on a user macro",
+             eval_to_string("(define-macro (twice e) `(begin ,e ,e))"
+                            "(macroexpand-1 '(twice (f)))"),
+             "(begin (f) (f))");
+    // 展開されないものはそのまま返る（エラーにしない）
+    check_eq("macroexpand-1 leaves a call alone",
+             eval_to_string("(macroexpand-1 '(+ 1 2))"), "(+ 1 2)");
+    check_eq("macroexpand-1 leaves an atom alone",
+             eval_to_string("(macroexpand-1 'x)"), "x");
+    // macroexpand は外側だけを繰り返す。部分式へは降りない
+    check_eq("macroexpand repeats the outside only",
+             eval_to_string("(define-macro (swap! a b)"
+                            " `(let ((tmp ,a)) (set! ,a ,b) (set! ,b tmp)))"
+                            "(macroexpand '(swap! p q))"),
+             "((lambda (tmp) (set! p q) (set! q tmp)) p)");
+    check_eq("macroexpand does not descend",
+             eval_to_string("(macroexpand '(f (let ((x 1)) x)))"),
+             "(f (let ((x 1)) x))");
+    // 自分自身に展開するマクロで止まらなくならないこと
+    check_eq("macroexpand gives up on a self-expanding macro",
+             eval_error_body("(define-macro (boom x) `(boom ,x)) (macroexpand '(boom 1))"),
+             "macroexpand: expansion did not terminate\n"
+             "  note: the outermost form still expands after 1000 steps; "
+             "a macro is probably expanding into itself");
 }
 
 static void selftest_eval() {
@@ -3858,6 +4135,8 @@ int main(int argc, char** argv) {
             selftest_expand();
             selftest_positions();
             selftest_eval();
+            selftest_errors();
+            selftest_macroexpand();
             selftest_test_matching();
             std::printf("\n  %d checks, %d failed\n", g_checks, g_failures);
             return g_failures == 0 ? 0 : 1;

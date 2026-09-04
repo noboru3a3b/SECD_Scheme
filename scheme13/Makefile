@@ -45,6 +45,9 @@ test: $(TARGET)
 	@cd $(ROOT) && $(HERE)/tests/run_golden.sh $(TARGET)
 
 # 呼び出し性能のベンチ。scheme12 は約3.4秒（100万回）
+# time は bash の組み込みなので、/bin/sh が dash の環境でも動くよう
+# シェルを明示する（7日目に修正）。
+bench: SHELL := /bin/bash
 bench: $(TARGET)
 	@cd $(ROOT) && printf '(define (loop i acc) (if (= i 0) acc (loop (- i 1) (+ acc 1))))\n(display (loop 1000000 0))\n(newline)\n' > $(HERE)/.bench.scm
 	@cd $(ROOT) && time $(TARGET) --load $(HERE)/.bench.scm

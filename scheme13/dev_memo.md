@@ -281,14 +281,44 @@ scheme12 では以下のバグが実際に起きた。同じ轍を踏まない�
   全 `Value` に持たせるとメモリが増えるので、位置表は
   `Pair*` → `SourcePos` の副表（GC 管理の `unordered_map`）にする案を第一候補とする。
   → **未決定。§9 に保留として記載。**
-- エラー表示の目標形:
+- エラー表示の形（**7日目の決定33 で確定**。以後この形を崩さない）:
 
 ```
-Error: mylib.scm:42:8: bad syntax in define:
-  variable definition needs a value expression
-    (define x)
-            ^
+Error: mylib.scm:1:1: car: wrong type of argument
+  expected: a pair
+  given: 5
+    (car 5)
+    ^
 ```
+
+  1行目は `位置: 見出し`。見出しは「**誰が**」「**何をしくじったか**」だけを言う。
+  2行目以降は字下げ2の**詳細行**で、`expected:` → `given:` の順。
+  最後に問題のソース行とキャレット（字下げ4）。
+
+  **見出しの語彙は次に限る。** 増やすときはこの表に足してから使うこと。
+
+  | 見出し | 使うところ |
+  | --- | --- |
+  | `<who>: wrong type of argument` | 型が違う |
+  | `<who>: wrong number of arguments` | 引数の数が違う（クロージャもプリミティブも） |
+  | `<who>: index out of range` | 文字列・ベクタへの添字 |
+  | `<who>: argument out of range` | 値そのものの範囲（ASCII コード、長さ、乱数の上限） |
+  | `bad syntax in <form>` | 構文検査（セクション6/7/8） |
+  | `unbound variable: <name>` | 未束縛の参照 |
+  | `attempt to call a non-procedure` | 呼べないものを呼んだ |
+  | `internal error: <what>` | **処理系自身の不変条件が壊れた。利用者の誤りではない** |
+
+  詳細行のラベルは `expected` / `given` / `note` の3つ。`note` は expected/given に
+  当てはまらない補足（未束縛の説明、内部エラーの断り書き）にだけ使う。
+  綴りは `detail()` / `expected_given()`（セクション2）に閉じ込め、
+  各所で文字列を組み立てない。
+
+- **`given:` には「悪い部分そのもの」を出す。** フォーム全体はキャレット行が
+  見せている。`(let ((a 1) b) a)` で `given: b` と言えれば、読む側は探さずに済む。
+
+- **前置きは2種類。** REPL は `Error:` を付けて次の入力へ進み、`--load` 中は
+  `Fatal error:` を付けて終了コード1で止まる。**読み進めるかどうかの違い**を
+  前置きで表す。同じ文面を両方で使う。
 
 ### 4.3 再帰の禁止事項
 
@@ -915,17 +945,117 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
 - 期待値 `:UNDEF` は3箇所あるが、NG になるのは2箇所。`(letrec ((a a)) a)` は
   scheme13 でも `:undef` を返す（letrec の展開が `:undef` で初期化するため）。
 
+### 2026-09-04（7日目）— エラーメッセージの設計と、展開を見る道具
+
+§8 の1番目（エラーメッセージの見直し）と4番目（`macroexpand`）。
+
+**決めたこと**
+
+33. **エラー本文は「見出し1行 + 字下げした詳細行」に揃える**（§4.2 に確定形を
+    書いた）。見出しは誰が何をしくじったかだけを言い、期待と実際は
+    `expected:` / `given:` の詳細行に置く。
+    - 6日目まではメッセージが3つの流儀に分かれていた。構文検査は
+      `bad syntax in let:` + 散文、プリミティブは `car: expected pair, got 5` の
+      1行、VM は `APP: stack underflow` の1行。**読む側が毎回違う場所を探していた。**
+    - 詳細行の綴りは `detail()` / `expected_given()`（セクション2）に閉じ込め、
+      各所で文字列を組み立てさせない。見出しの語彙も §4.2 の表に限る
+    - 見出しの後ろのコロンは**やめた**（`bad syntax in let:` → `bad syntax in let`）。
+      `car: wrong type of argument:` のように who のコロンと二重になるため。
+      字下げが詳細行の始まりを示すので、コロンは要らない
+    - 却下案: 引数の位置（`argument 1 of car`）も出す。値が `given:` に出ていて
+      `who` も分かるので、146箇所を機械的に書き換えるだけの利得が無いと判断した
+
+34. **処理系自身の不変条件が壊れた場合を `internal error:` として切り分ける**
+    （新設。`internal_error()`）。VM のスタック不足、命令の添字外れ、
+    セクション3 のアクセサ（`as_pair` など）の型違いがこれにあたる。
+    - **これらは利用者の書いたプログラムの誤りではない。** 検査はセクション6
+      （構文）とセクション11（プリミティブ）の仕事で、そこを素通りしてここに
+      落ちたなら scheme13 側の検査漏れである
+    - scheme12 はアクセサが `expected pair` を返していて、利用者の型エラーと
+      見分けがつかなかった。どちらの問題か分からないのが最も困る
+    - 本文に「this is a bug in scheme13 itself, not in the program being run」を
+      添える。報告してもらうための断り書き
+
+35. **クロージャの引数不足は呼ばれた側の名前を出す**（§8 の1番目が名指しした点）。
+    `f: wrong number of arguments` / `expected: 2 arguments` / `given: 1`。
+    名前は `Template::name`。無名なら表示形 `#<closure:(a b)>` で代用する。
+    **表示形そのものは §2.1 で凍結されていて名前を含められない**ので、
+    `callee_name()` として別に持ち出した。凍結仕様は動かしていない。
+
+36. **`given:` には悪い部分そのものを出す。** `(let ((a 1) b) a)` なら
+    `given: b`。フォーム全体はキャレット行が見せているので、詳細行が同じものを
+    もう一度見せても読む側は探す手間が減らない。cond / case / do / set! /
+    束縛リストを、悪い部分が手元にあるものはすべてこの形にした。
+
+37. **空の入れ物への添字に「0 から -1 まで」と言わせない。**
+    `(vector-ref (vector) 0)` は `expected: an element index, but the vector is
+    empty`。`prim_range_error()` が limit == 0 を別の文にする。
+    同じ理由で、値そのものの範囲（ASCII コード、長さ、乱数の上限）は
+    添字ではないので見出しを `argument out of range` に分けた。
+
+38. **`macroexpand-1` / `macroexpand` をプリミティブとして出す**
+    （§8 の4番目。原典にあって scheme12 で失われていた）。展開器も
+    コンパイラも既にあるので、外に出すだけで入った。
+    - **1段の順序はコンパイラと同じにする。** 特殊形式の書き換え
+      （`expand_form_1`）が先、ユーザマクロ（`macro_expand_1_expr`）が後。
+      ここを違えると、この道具で見た展開と実際にコンパイルされる展開がずれて、
+      道具として意味が無くなる。`expand_one_step()` に1箇所だけ書いた
+    - `macroexpand` は **CL と同じく外側だけ**を繰り返す。部分式へは降りない
+    - 自分自身に展開するマクロで止まらなくなるので上限1000段を置き、
+      超えたら「a macro is probably expanding into itself」と言って諦める
+    - `code` 特殊形式と有理数は入れない（8日目以降も入れない。前者は使い道が
+      無く、後者は §2.2 の「整数のみ」を壊す）
+
+**この日やったこと**
+
+- セクション2 に `detail()` / `expected_given()` / `internal_error()`
+- セクション3 のアクセサ5つを `internal_error` へ
+- セクション6 に `arity_detail()`（特殊形式とプリミティブで同じ文面を使う）。
+  `check_arity` / `check_bindings` を expected/given へ
+- セクション7（cond / case / do / quasiquote）とセクション8（set! / lambda）の
+  文面を揃え、悪い部分を `given:` に出す
+- セクション10 に `callee_name()`。VM の不変条件13箇所を `internal_error` へ
+- セクション11 に `prim_type_error()` / `prim_range_error()`。
+  `prim_error` の呼び出し38箇所を仕分け
+- セクション11 に `macroexpand-1` / `macroexpand`（プリミティブは99個になった）。
+  `(help)` に Expansion の項を追加
+- `--selftest` に `selftest_errors()`（13項目）と `selftest_macroexpand()`（7項目）。
+  **126 → 146 checks**
+- `Makefile` の `bench` が `/bin/sh` が dash の環境で動かなかったのを修正
+  （`time` は bash の組み込み）。`bench: SHELL := /bin/bash`
+
+**分かったこと**
+
+- **§7 のプリミティブ数（5日目「123個」→6日目「125個」）は誤りだった。**
+  実測は **99個**（＋特殊形式19個）。数え方の根拠を残しておく:
+
+  ```sh
+  printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE      # 99
+  printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM   # 19
+  ```
+
+  「登録名に欠けなし」という主張のほうは `compare` とゴールデンが押さえて
+  いるので、影響があるのは数字だけ。**今後この欄を書き換えるときは、
+  上のコマンドで測ってから書くこと。**
+
+- **ゴールデン12件は1バイトも変わらなかった。** 既存の .scm 資産はどれも
+  エラーを踏まずに走りきるため。文面を変える作業としては都合がよいが、
+  裏を返すと**ゴールデンはエラーの回帰を見ていない**。だから文面は
+  `selftest_errors()` で固定した。エラーを見るのはこちらの仕事。
+- 性能は変わっていない（100万回で 0.12 秒）。`make_frame` の分岐を
+  1つにまとめたが、どちらにせよ分岐予測に乗る位置なので差は出ない。
+
 ---
 
 ## 7. 現在の状態
 
 **scheme13 は完動する。** 受け入れ基準（§5.1）を満たし、性能目標（§5.3）も達成。
 
-- `scheme13/scheme13.cpp` — **セクション 1〜12 すべて実装済み**（3802行）
+- `scheme13/scheme13.cpp` — **セクション 1〜12 すべて実装済み**（4177行）
   | セクション | 状態 |
   | --- | --- |
   | 1 依存と GC 設定 | ✅ |
-  | 2 ソース位置とエラー | ✅ `SourcePos` / `SchemeError` / `format_error` |
+  | 2 ソース位置とエラー | ✅ `SourcePos` / `SchemeError` / `format_error` / `detail` / `internal_error` |
   | 3 値モデル | ✅ タグ付き基底クラス、即値 fixnum、シングルトン |
   | 4 表示 | ✅ §2.1 の全行を自己テストで固定 |
   | 5 リーダ | ✅ 位置記録つき |
@@ -934,7 +1064,7 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
   | 9 命令セット | ✅ 逆アセンブル込み（**ファイル上は 8 より前**。決定24） |
   | 8 コンパイラ | ✅ |
   | 10 VM | ✅ |
-  | 11 プリミティブ | ✅ 125個。scheme12 の登録名に欠けなし（+ test-start / test-end） |
+  | 11 プリミティブ | ✅ **99個**（＋特殊形式19個）。scheme12 の登録名に欠けなし（+ test-start / test-end / macroexpand-1 / macroexpand） |
   | 12 起動 | ✅ REPL / `--load` / `--selftest` / `--read` / `--expand` |
 - `scheme13/Makefile` — ✅（`all` / `selftest` / `compare` / `test` / `bench` / `clean`）
 - `scheme13/tests/` — ✅ ゴールデン12件 + 展開の等価性検証 + README
@@ -944,10 +1074,10 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
 いま走るテスト:
 
 ```sh
-make -C scheme13 selftest     # 126 checks, 0 failed（セクション 3〜11 の回帰）
+make -C scheme13 selftest     # 146 checks, 0 failed（セクション 3〜11 の回帰）
 make -C scheme13 compare      #  15 passed, 0 failed（展開が scheme12 と等価）
 make -C scheme13 test         #  12 passed, 0 failed  ← 受け入れ基準
-make -C scheme13 bench        # 100万回で約 0.1 秒（scheme12 は約 3.3 秒）
+make -C scheme13 bench        # 100万回で約 0.12 秒（scheme12 は約 3.3 秒）
 ```
 
 `test-case6.scm` は原典のテスト機構が復活したので、**145項目が式ごとに
@@ -964,30 +1094,36 @@ scheme12（`scheme12_bignum_boost_debug.cpp`）には**まだ触れていない*
 
 ## 8. 次にやること
 
-受け入れ基準（§5.1）と性能目標（§5.3）は達成済み。原典のテスト機構も復活した。
-ここから先は**品質を上げる作業**で、順序は入れ替えてよい。
+受け入れ基準（§5.1）と性能目標（§5.3）は達成済み。原典のテスト機構も復活し、
+エラーメッセージも §4.2 の形に揃った。ここから先は順序を入れ替えてよい。
 
-1. **エラーメッセージの見直し。** 位置は付くようになったが、文面は scheme12 から
-   そのまま持ってきたものが多い。§4.2 の目標形（何が期待されていたかを1行足す）に
-   揃える価値がある。とくに `arity mismatch` は呼ばれた側のクロージャ名を出したい
-   （`Template::name` は既に持っている）。
+1. **scheme12 の置き換えを利用者と相談する。** これが本命。7日目でエラー
+   メッセージまで済んだので、機能・性能・診断のどれを取っても scheme13 が
+   上回っている。**判断は利用者のもので、勝手に置き換えない。**
+   置き換えるなら追随が要るもの:
+   - `README.md`（ビルド手順と処理系の説明）
+   - ルートの `Makefile` / `Makefile.linux` / `Makefile.freebsd` / `Makefile.netbsd`
+   - `.github/` の CI
+   - `scheme12_debug解説.md` — **これが最も重い。** 148KB あり、章立てが
+     scheme12 の実装に密着している。scheme13 用に書き直すのか、scheme12 の
+     文書として残すのかを最初に決めること（解説文書は実装に追随させる、が
+     既存の約束）
 
-2. **性能の次の一手**（必要なら）。いまの実装で 31倍出ているので急がないが、
+2. **マクロ展開後の位置情報**（§9 の残り）。`macroexpand` を出したので
+   確かめる道具が揃った。`define-macro` の展開結果が深く入れ子になったとき、
+   エラーがどこを指すかを実際に見て、決定21 の扱いで足りるか判断する。
+
+3. **性能の次の一手**（必要なら）。いまの実装で 27倍出ているので急がないが、
    もし足りなくなったら順に:
    - `if` を SEL/JOIN からジャンプ命令へ（§4.4.2 の却下案B）
    - マクロ展開のメモ化（原典がやっている。`micro_scheme8_notes.md` §3.6）
    - `LD` の環境たどりを、深さ0の場合に特化する
 
-3. **scheme12 の置き換え。** 上の 1 が済み、しばらく使って問題が出なければ、
-   `scheme12_debug` を scheme13 で置き換えるかを利用者と相談する。
-   置き換えるなら `README.md` / `Makefile*` / `scheme12_debug解説.md` の
-   追随が要る（解説文書は実装に追随させる、が既存の約束）。
-
-4. **原典から失われたまま復活していないもの**（`micro_scheme8_notes.md` §6.2）。
-   `macroexpand-1` / `macroexpand` は、いまなら `expand_form_1` と
-   `macro_expand_1_expr` があるので**プリミティブとして出すだけ**で入る。
-   デバッグ処理系としての価値は高い。`code` 特殊形式と有理数は入れない
-   （前者は使い道がなく、後者は §2.2 の「整数のみ」を壊す）。
+4. **エラーの回帰をゴールデン側でも見るか。** 7日目に分かったとおり、既存の
+   .scm 資産はエラーを踏まないので、ゴールデン12件はエラーの文面を1つも
+   見ていない。いまは `selftest_errors()` が固定しているが、
+   「エラーを踏むだけの .scm」をゴールデンに1本足す手もある。
+   **急がない**（selftest で足りている）。
 
 **セクションに手を入れるときは `selftest` / `compare` / `test` の3つを必ず通すこと。**
 
@@ -1014,6 +1150,11 @@ scheme12（`scheme12_bignum_boost_debug.cpp`）には**まだ触れていない*
   **`define-macro` で定義されたユーザマクロ**の展開結果。こちらは
   セクション8（コンパイラ）でマクロ展開を呼ぶときに同じ扱いをすればよいはずだが、
   展開結果が深く入れ子になる場合にどこまで役に立つかは未確認。
+  → 7日目に `macroexpand` を出したので、**確かめる道具は揃った**（§8 の2番目）。
+
+- ~~**エラーメッセージの文面**~~ → 7日目の決定33〜37 で §4.2 に確定形を書いた。
+  見出しの語彙と詳細行のラベルはあの表に限る。**増やしたくなったら、
+  使う前に §4.2 の表へ足すこと。**
 
 - ~~**`Instruction` の持ち方**~~ → 4日目の決定17（§4.4.6）で解決。
   固定長32バイト、汎用ポインタ枠2つ、意味は命令ごとに §4.4.5 の表で決める。
