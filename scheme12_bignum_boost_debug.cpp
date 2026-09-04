@@ -1009,17 +1009,69 @@ static ValuePtr make_gensym(const std::string& prefix = "g") {
     return make_symbol(prefix + std::to_string(++g_gensym_counter));
 }
 
-// ... (expand_let, expand_let_star, expand_letrec, expand_and, expand_or, 
-//      expand_cond, qq_transfer, expand_case, expand_do は以前と同じなので省略)
 
-// ここでは主要な関数のみ記載
+// --- 特殊形式の構文チェック -------------------------------------------------
+// 素の car/cdr に構文検査を任せると、(define x) も (if) も (set! 1 2) も
+// すべて "expected pair" という同じメッセージになり、どのフォームの
+// どこが悪いのか分からない。フォーム名・期待する形・実際に書かれた式を
+// 添えて報告する。rest から (form . rest) を復元して表示する。
+[[noreturn]] static void syntax_error(const std::string& form,
+                                      const std::string& what, ValuePtr rest) {
+    std::string shown = to_string(make_pair(make_symbol(form), rest));
+    if (shown.size() > 160) shown = shown.substr(0, 157) + "...";
+    vm_error("bad syntax in " + form + ": " + what + " -- in " + shown);
+}
+
+// フォームの引数の個数。ドットリスト（不正な形）なら nullopt。
+static std::optional<std::size_t> form_arity(ValuePtr rest) {
+    std::size_t n = 0;
+    while (is_pair(rest)) { ++n; rest = cdr(rest); }
+    if (!is_nil(rest)) return std::nullopt;
+    return n;
+}
+
+// min_args 以上 max_args 以下の引数を要求する（max_args == 0 は上限なし）。
+static void check_arity(const std::string& form, ValuePtr rest,
+                        std::size_t min_args, std::size_t max_args) {
+    auto n = form_arity(rest);
+    if (!n) syntax_error(form, "improper argument list", rest);
+    if (*n < min_args || (max_args != 0 && *n > max_args)) {
+        std::ostringstream oss;
+        oss << "expects ";
+        if (max_args == 0) oss << "at least " << min_args;
+        else if (min_args == max_args) oss << "exactly " << min_args;
+        else oss << min_args << " to " << max_args;
+        oss << " argument(s), got " << *n;
+        syntax_error(form, oss.str(), rest);
+    }
+}
+
+// (let ((var expr) ...) ...) 系の束縛リストを検証する。
+static void check_bindings(const std::string& form, ValuePtr rest, ValuePtr bindings) {
+    if (!is_nil(bindings) && !is_pair(bindings))
+        syntax_error(form, "bindings must be a list", rest);
+    for (ValuePtr b = bindings; !is_nil(b); b = cdr(b)) {
+        if (!is_pair(b)) syntax_error(form, "improper binding list", rest);
+        ValuePtr one = car(b);
+        if (!is_pair(one) || !is_symbol(car(one)) ||
+            !is_pair(cdr(one)) || !is_nil(cdr(cdr(one)))) {
+            syntax_error(form, "each binding must be (variable expression)", rest);
+        }
+    }
+}
+// ---------------------------------------------------------------------------
+
 static ValuePtr expand_let(ValuePtr rest) {
+    check_arity("let", rest, 1, 0);
     ValuePtr bindings = car(rest);
     ValuePtr body = cdr(rest);
     if (is_symbol(bindings)) {
+        // 名前付き let: (let name ((v e) ...) body ...)
+        if (!is_pair(body)) syntax_error("let", "named let needs a binding list", rest);
         ValuePtr name = bindings;
         ValuePtr real_bindings = car(body);
         ValuePtr real_body = cdr(body);
+        check_bindings("let", rest, real_bindings);
         ValueVec bs = vector_from_list(real_bindings);
         ValueVec params, args;
         for (auto& b : bs) {
@@ -1035,6 +1087,7 @@ static ValuePtr expand_let(ValuePtr rest) {
         return list_from_vector({make_symbol("letrec"), list_from_vector({rec_bind}), 
                                 list_from_vector(call_items)});
     }
+    check_bindings("let", rest, bindings);
     ValueVec bs = vector_from_list(bindings);
     ValueVec params, args;
     for (auto& b : bs) {
@@ -1050,8 +1103,10 @@ static ValuePtr expand_let(ValuePtr rest) {
 }
 
 static ValuePtr expand_let_star(ValuePtr rest) {
+    check_arity("let*", rest, 1, 0);
     ValuePtr bindings = car(rest);
     ValuePtr body = cdr(rest);
+    check_bindings("let*", rest, bindings);
     ValueVec bs = vector_from_list(bindings);
     if (bs.empty()) return make_begin_form(vector_from_list(body));
     if (bs.size() == 1) return list_from_vector({make_symbol("let"), 
@@ -1065,8 +1120,10 @@ static ValuePtr expand_let_star(ValuePtr rest) {
 }
 
 static ValuePtr expand_letrec(ValuePtr rest) {
+    check_arity("letrec", rest, 1, 0);
     ValuePtr bindings = car(rest);
     ValuePtr body = cdr(rest);
+    check_bindings("letrec", rest, bindings);
     ValueVec bs = vector_from_list(bindings);
     ValueVec vars, vals;
     for (auto& b : bs) {
@@ -1108,7 +1165,10 @@ static ValuePtr expand_or(ValuePtr rest) {
 
 static ValuePtr expand_cond(ValuePtr rest) {
     if (is_nil(rest)) return make_symbol(":undef");
+    if (!is_pair(rest)) syntax_error("cond", "improper clause list", rest);
     ValuePtr clause = car(rest);
+    if (!is_pair(clause))
+        syntax_error("cond", "each clause must be (test expression ...)", rest);
     ValuePtr rem = cdr(rest);
     ValuePtr test = car(clause);
     ValuePtr body = cdr(clause);
@@ -1166,12 +1226,16 @@ static ValuePtr qq_transfer(ValuePtr ls) {
 }
 
 static ValuePtr expand_case(ValuePtr rest) {
+    check_arity("case", rest, 1, 0);
     ValuePtr key = car(rest);
     ValuePtr clauses = cdr(rest);
     ValuePtr t = make_gensym("case");
     ValueVec cond_clauses;
     for (ValuePtr cur = clauses; !is_nil(cur); cur = cdr(cur)) {
+        if (!is_pair(cur)) syntax_error("case", "improper clause list", rest);
         ValuePtr cl = car(cur);
+        if (!is_pair(cl))
+            syntax_error("case", "each clause must be ((datum ...) expression ...)", rest);
         ValuePtr head = car(cl);
         ValuePtr body = cdr(cl);
         if (is_symbol(head, "else")) {
@@ -1198,13 +1262,19 @@ static ValuePtr expand_case(ValuePtr rest) {
 }
 
 static ValuePtr expand_do(ValuePtr rest) {
+    check_arity("do", rest, 2, 0);
     ValuePtr var_form = car(rest);
     ValuePtr rem = cdr(rest);
     ValuePtr test_form = car(rem);
+    if (!is_pair(test_form))
+        syntax_error("do", "test clause must be (test expression ...)", rest);
     ValuePtr body = cdr(rem);
     ValueVec vars_raw = vector_from_list(var_form);
     ValueVec vars, inits, steps;
     for (auto& v : vars_raw) {
+        // (variable init) または (variable init step)
+        if (!is_pair(v) || !is_symbol(car(v)) || !is_pair(cdr(v)))
+            syntax_error("do", "each spec must be (variable init [step])", rest);
         vars.push_back(car(v));
         inits.push_back(car(cdr(v)));
         ValuePtr step_tail = cdr(cdr(v));
@@ -1343,6 +1413,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
     ValuePtr rest = cdr(expr);
 
     if (is_symbol(head, "quote")) {
+        check_arity("quote", rest, 1, 1);
         Instruction ldc = make_ins(Op::LDC);
         ldc.constant = car(rest);
         emit(code, ldc);
@@ -1359,6 +1430,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
     }
 
     if (is_symbol(head, "quasiquote")) {
+        check_arity("quasiquote", rest, 1, 1);
         comp(qq_transfer(car(rest)), env, code, tail);
         return;
     }
@@ -1404,6 +1476,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
     }
 
     if (is_symbol(head, "if")) {
+        check_arity("if", rest, 2, 3);
         ValuePtr test = car(rest);
         ValuePtr rem1 = cdr(rest);
         ValuePtr then_e = car(rem1);
@@ -1428,12 +1501,14 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
     }
 
     if (is_symbol(head, "lambda")) {
+        check_arity("lambda", rest, 1, 0);
         ValuePtr params_expr = car(rest);
         ValuePtr body = cdr(rest);
         std::vector<std::string, gc_allocator<std::string>> fixed;
         std::optional<std::string> rest_param;
         if (!extract_params(params_expr, fixed, rest_param)) 
-            vm_error("invalid lambda params");
+            syntax_error("lambda",
+                         "parameter list must be symbols, e.g. (x y) or (x . rest)", rest);
         body = scan_out_defines(body);   // 本体先頭の define を letrec へ移す
         CompileEnv env2 = env;
         std::vector<std::string, gc_allocator<std::string>> frame = fixed;
@@ -1451,9 +1526,15 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
     }
 
     if (is_symbol(head, "define")) {
+        check_arity("define", rest, 1, 0);
         ValuePtr lhs = car(rest);
         ValuePtr rhs_tail = cdr(rest);
         if (is_symbol(lhs)) {
+            // (define name expr)
+            if (is_nil(rhs_tail))
+                syntax_error("define", "variable definition needs a value expression", rest);
+            if (!is_nil(cdr(rhs_tail)))
+                syntax_error("define", "variable definition takes exactly one value", rest);
             comp(car(rhs_tail), env, code, false);
             Instruction d = make_ins(Op::DEF);
             d.sym = as_symbol_name(lhs);
@@ -1471,13 +1552,22 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
             emit(code, d);
             return;
         }
-        vm_error("invalid define");
+        syntax_error("define",
+                     "expected (define name expr) or (define (name . params) body ...)",
+                     rest);
     }
 
     if (is_symbol(head, "define-macro")) {
+        check_arity("define-macro", rest, 1, 0);
         ValuePtr lhs = car(rest);
         ValuePtr rhs_tail = cdr(rest);
         if (is_symbol(lhs)) {
+            if (is_nil(rhs_tail))
+                syntax_error("define-macro",
+                             "macro definition needs a transformer expression", rest);
+            if (!is_nil(cdr(rhs_tail)))
+                syntax_error("define-macro",
+                             "macro definition takes exactly one transformer", rest);
             comp(car(rhs_tail), env, code, false);
             Instruction d = make_ins(Op::DEFM);
             d.sym = as_symbol_name(lhs);
@@ -1495,13 +1585,17 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
             emit(code, d);
             return;
         }
-        vm_error("invalid define-macro");
+        syntax_error("define-macro",
+                     "expected (define-macro name expr) or "
+                     "(define-macro (name . params) body ...)", rest);
     }
 
     if (is_symbol(head, "set!")) {
+        check_arity("set!", rest, 2, 2);
         ValuePtr name = car(rest);
         ValuePtr rhs = car(cdr(rest));
-        if (!is_symbol(name)) vm_error("set! target must be symbol");
+        if (!is_symbol(name))
+            syntax_error("set!", "assignment target must be a symbol", rest);
         std::string sym = as_symbol_name(name);
         comp(rhs, env, code, false);
         auto pos = location_of(sym, env);
@@ -1519,6 +1613,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
     }
 
     if (is_symbol(head, "call/cc")) {
+        check_arity("call/cc", rest, 1, 1);
         comp(car(rest), env, code, false);
         // 末尾位置なら TAPP と同様にダンプを積まない（TCO を効かせる）
         emit(code, make_ins(tail ? Op::TCALLCC : Op::CALLCC));
@@ -1526,8 +1621,8 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
     }
 
     if (is_symbol(head, "apply")) {
+        check_arity("apply", rest, 2, 0);
         ValueVec xs = vector_from_list(rest);
-        if (xs.empty()) vm_error("apply needs at least one arg");
         ValuePtr fn = xs.front();
         for (std::size_t i = 1; i < xs.size(); ++i) comp(xs[i], env, code, false);
         Instruction aa = make_ins(Op::ARGS_AP);
