@@ -21,7 +21,7 @@ GC_LIB        = -L/usr/local/lib -lgc -lgccpp
 TARGET = $(HERE)/scheme13
 SOURCE = $(HERE)/scheme13.cpp
 
-.PHONY: all clean selftest test bench help
+.PHONY: all clean selftest compare test bench help
 
 all: $(TARGET)
 
@@ -32,6 +32,12 @@ $(TARGET): $(SOURCE)
 # コンパイラと VM が無い段階でも走る。セクション 3〜5 の回帰はこれ。
 selftest: $(TARGET)
 	@$(TARGET) --selftest
+
+# 構文展開（セクション7）が scheme12 と等価かを突き合わせる。
+# 同じフォームを「そのまま」と「scheme13 が展開してから」の2通りで scheme12 に
+# コンパイルさせ、命令列が一致することを見る。scheme12_debug のビルドが要る。
+compare: $(TARGET)
+	@cd $(ROOT) && $(HERE)/tests/compare_expand.sh $(TARGET)
 
 # 既存 .scm 資産との互換性回帰（受け入れ基準そのもの）。
 # セクション 8〜11 が入るまでは走らない。
@@ -51,6 +57,7 @@ help:
 	@echo "scheme13 targets:"
 	@echo "  all      - ビルド"
 	@echo "  selftest - 凍結仕様との突き合わせ（セクション3〜5の回帰）"
+	@echo "  compare  - 構文展開が scheme12 と等価かを突き合わせる"
 	@echo "  test     - 既存 .scm 資産との互換性回帰（ゴールデン比較）"
 	@echo "  bench    - 呼び出し性能のベンチ（scheme12 は約3.4秒）"
 	@echo "  clean    - 生成物を削除"
