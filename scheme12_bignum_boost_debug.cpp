@@ -1214,6 +1214,48 @@ static ValuePtr expand_do(ValuePtr rest) {
     });
 }
 
+// R5RS 4.1.6 / 5.2.2: 本体先頭に並ぶ define 群を letrec* 相当の内部束縛へ移す。
+// これをやらないと define が Op::DEF（グローバルへの代入）にコンパイルされ、
+// 内部の補助関数が LDG でグローバルを引くため、同名の補助関数を持つ別の関数に
+// 後勝ちで上書きされてしまう。
+// 先頭の連続した define だけを対象にする（式より後ろの define は R5RS でも未定義）。
+// 呼ぶのは comp() の lambda ケースのみ。let / let* / 名前付き let / do はすべて
+// lambda へ展開されてから comp に戻るので自動的にカバーされ、トップレベルや
+// begin の define は従来どおりグローバルのまま残る。
+static ValuePtr scan_out_defines(ValuePtr body) {
+    ValueVec forms = vector_from_list(body);
+    ValueVec bindings;
+    std::size_t n = 0;
+    while (n < forms.size() && is_pair(forms[n]) && is_symbol(car(forms[n]), "define")) {
+        ValuePtr drest = cdr(forms[n]);
+        if (is_nil(drest)) vm_error("invalid internal define");
+        ValuePtr lhs = car(drest);
+        ValuePtr rhs_tail = cdr(drest);
+        if (is_symbol(lhs)) {
+            // (define y expr)
+            if (is_nil(rhs_tail)) vm_error("internal define needs a value");
+            bindings.push_back(list_from_vector({lhs, car(rhs_tail)}));
+        } else if (is_pair(lhs) && is_symbol(car(lhs))) {
+            // (define (g . params) body...)
+            ValuePtr lambda_expr = make_pair(make_symbol("lambda"),
+                                             make_pair(cdr(lhs), rhs_tail));
+            bindings.push_back(list_from_vector({car(lhs), lambda_expr}));
+        } else {
+            vm_error("invalid internal define");
+        }
+        ++n;
+    }
+    if (bindings.empty()) return body;
+
+    ValueVec letrec_form;
+    letrec_form.push_back(make_symbol("letrec"));
+    letrec_form.push_back(list_from_vector(bindings));
+    for (std::size_t i = n; i < forms.size(); ++i) letrec_form.push_back(forms[i]);
+    // 本体が define だけの場合、letrec の本体が空になるので :undef を足す
+    if (n == forms.size()) letrec_form.push_back(make_symbol(":undef"));
+    return list_from_vector({list_from_vector(letrec_form)});
+}
+
 static void comp_body(ValuePtr body, const CompileEnv& env, CodePtr code, bool tail) {
     ValueVec forms = vector_from_list(body);
     if (forms.empty()) {
@@ -1371,6 +1413,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
         std::optional<std::string> rest_param;
         if (!extract_params(params_expr, fixed, rest_param)) 
             vm_error("invalid lambda params");
+        body = scan_out_defines(body);   // 本体先頭の define を letrec へ移す
         CompileEnv env2 = env;
         std::vector<std::string, gc_allocator<std::string>> frame = fixed;
         if (rest_param) frame.push_back(*rest_param);
