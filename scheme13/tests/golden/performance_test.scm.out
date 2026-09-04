@@ -1,0 +1,17 @@
+===========================================
+  Performance Test: Vector Environment
+===========================================
+
+Running: Many variables access (1000 iterations)...
+  Completed
+Running: Fibonacci 15 (10 iterations)...
+  Completed
+Running: Multiple set! (10000 iterations)...
+  Completed
+
+===========================================
+Performance test completed!
+If optimization is working, these should be faster
+than the previous list-based implementation.
+===========================================
+NIL

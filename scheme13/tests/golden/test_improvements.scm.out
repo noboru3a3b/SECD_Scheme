@@ -1,0 +1,81 @@
+===========================================
+  scheme12 Improvement Verification Tests
+===========================================
+
+
+--- Test 1: Single-argument division ---
+[PASS] Division with 2 args
+[PASS] Division with 3 args
+Testing single-argument division (should fail)...
+  Attempting: (/ 5)
+    (Manual test required: verify error message)
+  Note: Please manually verify that (/ 5) raises an error
+
+--- Test 2: Square bracket support ---
+  Note: Square brackets are no longer supported.
+  Attempting to read: [1 2 3]
+  (Manual test: input '[1 2 3]' in REPL and verify it's treated as symbols/error)
+
+--- Test 3: eq? and eqv? behavior ---
+[PASS] eq? numbers (same value)
+[PASS] eqv? numbers (same value)
+[PASS] eq? numbers (different)
+[PASS] eq? symbols (same)
+[PASS] eqv? symbols (same)
+[PASS] eq? symbols (different)
+[PASS] eq? strings (same content)
+[PASS] eqv? strings (same content)
+[PASS] equal? strings (same content)
+
+--- Test 4: modulo sign rules (Scheme-compliant) ---
+[PASS] modulo(13, 5)
+[PASS] modulo(-13, 5)
+[PASS] modulo(13, -5)
+[PASS] modulo(-13, -5)
+  Expected results follow R5RS modulo specification:
+    modulo(-13, 5)  = 2  (remainder has sign of divisor)
+    modulo(13, -5)  = -2 (remainder has sign of divisor)
+
+--- Test 5: equal? with vectors ---
+[PASS] equal? vectors (same content)
+[PASS] equal? vectors (different)
+[PASS] equal? nested vectors
+
+--- Test 6: EOF object type ---
+  Creating EOF object via file I/O...
+[PASS] eof-object? on EOF
+[PASS] eof-object? on non-EOF
+[PASS] eof-object? on symbol
+  EOF is a dedicated object, not symbol :eof
+
+--- Test 7: Circular structure detection ---
+  Created circular list: (1 2 3 ...) -> loop
+  Displaying circular list:
+    (1 2 3 . #<circular>)
+  Testing equal? with circular structure...
+    [PASS] equal? handles circular structures
+
+--- Test 8: Big integer arithmetic ---
+[PASS] Large multiplication
+  big1 = 15241578750190521
+  big2 = big1 * big1 = 232305722798259244150093798251441
+
+===========================================
+  Test Summary
+===========================================
+Total tests:  22
+Passed:       22
+Failed:       0
+
+*** ALL TESTS PASSED ***
+
+===========================================
+  Manual Tests Required:
+===========================================
+1. Test (/ 5) in REPL - should raise error
+2. Test [1 2 3] in REPL - should fail to parse
+3. Verify trace-on/trace-off commands work
+4. Run (help) and verify documentation
+
+Cleaning up test files...
+NIL

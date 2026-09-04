@@ -8,6 +8,10 @@
 /scheme12_debug.exe
 /*.dll
 
+# scheme13 のビルド成果物
+/scheme13/scheme13
+/scheme13/.bench.scm
+
 # クラッシュダンプ
 /core.*
 

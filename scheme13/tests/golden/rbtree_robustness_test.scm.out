@@ -1,0 +1,50 @@
+
+Red-Black Tree Library (Improved) loaded.
+Commands:
+  (rb-test)      - Run comprehensive tests
+  (rb-example)   - Run simple example
+===========================================
+  rbtree robustness regression tests
+===========================================
+
+--- Section 0: validator self-test (each case MUST be rejected) ---
+ERROR: Right-leaning red link at key 10
+Tree is INVALID
+[PASS] 0a. detects right-leaning red link
+ERROR: Black height mismatch at node 10
+ERROR: BST order violated at key 10
+Tree is INVALID
+[PASS] 0b. detects BST order violation
+ERROR: Red node has red child at key 5
+Tree is INVALID
+[PASS] 0c. still detects red-red violation
+ERROR: Root is not black!
+[PASS] 0d. still detects red root
+Tree is valid (black height: 3)
+[PASS] 0e. valid tree still accepted
+
+--- Section 1: rb-delete-min standalone (RB-02 regression) ---
+[PASS] 1a. rb-delete-min never leaves root red (60 calls)
+[PASS] 1b. tree stays fully valid after every rb-delete-min
+[PASS] 1c. all 60 elements were removed
+
+--- Section 2: rb-delete descent invariant ---
+[PASS] 2a. sequential ascending delete via rb-delete (60 steps)
+[PASS] 2b. alternating min/max delete via rb-delete (61 keys)
+[PASS] 2c. exactly one node left
+[PASS] 2d. it is the middle key
+
+--- Section 3: rb-contains? / not-found vs. false-value ---
+[PASS] 3a. rb-contains? true for a key whose value is false
+[PASS] 3b. rb-search still returns false for that same key
+[PASS] 3c. rb-contains? false for a genuinely absent key
+[PASS] 3d. rb-contains? true for an ordinary present key
+
+--- Section 4: random fuzz, validate after every op ---
+[PASS] 4a. 1200 random insert/delete ops, always valid
+
+===========================================
+  Results: 17/17 passed
+*** ALL ROBUSTNESS TESTS PASSED ***
+===========================================
+NIL
