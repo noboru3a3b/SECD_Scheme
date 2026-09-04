@@ -120,7 +120,11 @@ struct BigInt : public gc {
     bool is_zero() const { return value == 0; }
 };
 
-struct FilePort : public gc {
+// gc ではなく gc_cleanup を継承する。gc 継承だけではデストラクタが
+// 一度も呼ばれず、到達不能になったポートの FILE* が閉じられないまま
+// ディスクリプタを食い潰す（close 忘れで数百個開くと EMFILE になる）。
+// gc_cleanup はファイナライザを登録し、回収時に ~FilePort を実行する。
+struct FilePort : public gc_cleanup {
     std::FILE* fp;
     bool is_input;
     bool is_closed;
@@ -638,33 +642,44 @@ static ValueVec vector_from_list(ValuePtr ls) {
     return out;
 }
 
+// 循環検出付きto_string（内部用）
+static std::string to_string_with_visited(const ValuePtr& v, 
+                                          std::unordered_set<void*>& visited);
+
 // 循環検出付きlist_to_string
+// visited は「いま辿っている経路上にあるノード」の集合。car へ降りるときも
+// 同じ集合を引き回し、走査を終えたら自分が入れた分だけ取り除く（バックトラック）。
+// 以前は car を to_string() で出力していたため visited が毎回作り直され、
+// car 方向の循環（(set-car! x x) など）を検出できずスタックを溢れさせていた。
+// erase しないと共有構造（DAG）を循環と誤判定するので、経路を記録して戻す。
 static std::string list_to_string_with_visited(ValuePtr ls, 
                                                std::unordered_set<void*>& visited) {
     std::ostringstream oss;
     oss << "(";
     bool first = true;
+    std::vector<void*> path;  // この呼び出しで visited に入れたノード
     
     while (!is_nil(ls)) {
         if (!is_pair(ls)) {
-            oss << " . " << to_string(ls);
+            oss << " . " << to_string_with_visited(ls, visited);
             break;
         }
         
         // 循環検出
         void* addr = static_cast<void*>(std::get<PairPtr>(ls->data));
-        if (visited.count(addr)) {
+        if (!visited.insert(addr).second) {
             oss << " . #<circular>";
             break;
         }
-        visited.insert(addr);
+        path.push_back(addr);
         
         if (!first) oss << " ";
         first = false;
-        oss << to_string(car(ls));
+        oss << to_string_with_visited(car(ls), visited);
         ls = cdr(ls);
     }
     oss << ")";
+    for (void* a : path) visited.erase(a);
     return oss.str();
 }
 
@@ -672,10 +687,6 @@ static std::string list_to_string(ValuePtr ls) {
     std::unordered_set<void*> visited;
     return list_to_string_with_visited(ls, visited);
 }
-
-// 循環検出付きto_string（内部用）
-static std::string to_string_with_visited(const ValuePtr& v, 
-                                          std::unordered_set<void*>& visited);
 
 static std::string vector_to_string_with_visited(VectorPtr vec,
                                                  std::unordered_set<void*>& visited) {
@@ -850,11 +861,16 @@ struct Reader {
         ValueVec items;
         while (true) {
             skip_ws();
+            if (p >= s.size()) vm_error("unexpected EOF in vector literal");
             if (peek() == ')') {
                 get();
                 return make_vector_value(items);
             }
-            items.push_back(read_expr());
+            ValuePtr x = read_expr();
+            // read_expr は入力を使い切ると nullptr を返す。ここで抜けないと
+            // nullptr を積み続けて無限ループ（＝メモリ枯渇）になる。
+            if (!x) vm_error("unexpected EOF in vector literal");
+            items.push_back(x);
         }
     }
 
@@ -876,6 +892,7 @@ struct Reader {
 
     ValuePtr read_list() {
         skip_ws();
+        if (p >= s.size()) vm_error("unexpected EOF in list");
         if (peek() == ')') {
             get();
             return g_nil;
@@ -883,6 +900,7 @@ struct Reader {
         ValueVec items;
         while (true) {
             skip_ws();
+            if (p >= s.size()) vm_error("unexpected EOF in list");
             if (peek() == ')') {
                 get();
                 return list_from_vector(items);
@@ -890,6 +908,7 @@ struct Reader {
             if (peek() == '.') {
                 get();
                 ValuePtr tail = read_expr();
+                if (!tail) vm_error("unexpected EOF after '.'");
                 skip_ws();
                 if (get() != ')') vm_error("expected ')'");
                 ValuePtr out = tail;
@@ -897,7 +916,11 @@ struct Reader {
                     out = make_pair(*it, out);
                 return out;
             }
-            items.push_back(read_expr());
+            ValuePtr x = read_expr();
+            // read_expr は入力を使い切ると nullptr を返す。ここで抜けないと
+            // nullptr を積み続けて無限ループ（＝メモリ枯渇）になる。
+            if (!x) vm_error("unexpected EOF in list");
+            items.push_back(x);
         }
     }
 
@@ -2174,33 +2197,49 @@ static bool value_equal_with_visited(ValuePtr a, ValuePtr b, VisitedMap& visited
     }
     
     // ペアの比較（循環検出付き・対応関係記録）
+    // cdr 方向は再帰ではなくループで辿る。以前は cdr も再帰していたため、
+    // 長いリスト同士の equal? が C スタックを溢れさせていた（20万要素で SIGSEGV）。
+    // car だけ再帰し、スパン上のノードは経路として記録して最後にまとめて外す。
     if (std::holds_alternative<PairPtr>(a->data) && 
         std::holds_alternative<PairPtr>(b->data)) {
-        PairPtr pa = std::get<PairPtr>(a->data);
-        PairPtr pb = std::get<PairPtr>(b->data);
-        
-        void* addr_a = static_cast<void*>(pa);
-        void* addr_b = static_cast<void*>(pb);
-        
-        // 既に訪問済みか確認
-        auto it = visited.find(addr_a);
-        if (it != visited.end()) {
-            // 対応関係が一致するか確認
-            return it->second == addr_b;
+        std::vector<void*> path;  // この呼び出しで visited に入れたキー
+        bool result;
+        for (;;) {
+            void* addr_a = static_cast<void*>(std::get<PairPtr>(a->data));
+            void* addr_b = static_cast<void*>(std::get<PairPtr>(b->data));
+            
+            // 既に訪問済みなら、対応関係が一致するかで判定（循環の合流点）
+            auto it = visited.find(addr_a);
+            if (it != visited.end()) {
+                result = (it->second == addr_b);
+                break;
+            }
+            
+            // 訪問記録
+            visited[addr_a] = addr_b;
+            path.push_back(addr_a);
+            
+            if (!value_equal_with_visited(car(a), car(b), visited)) {
+                result = false;
+                break;
+            }
+            
+            a = cdr(a);
+            b = cdr(b);
+            if (a == b) { result = true; break; }
+            
+            bool a_pair = is_pair(a);
+            bool b_pair = is_pair(b);
+            if (a_pair != b_pair) { result = false; break; }
+            if (!a_pair) {
+                // 末尾（NIL や非ペア）は 1 段だけ再帰して比較
+                result = value_equal_with_visited(a, b, visited);
+                break;
+            }
         }
         
-        // 訪問記録
-        visited[addr_a] = addr_b;
-        
-        // carとcdrを再帰比較
-        bool car_equal = value_equal_with_visited(car(a), car(b), visited);
-        bool cdr_equal = false;
-        if (car_equal) {
-            cdr_equal = value_equal_with_visited(cdr(a), cdr(b), visited);
-        }
-        
-        visited.erase(addr_a);  // バックトラック
-        return car_equal && cdr_equal;
+        for (void* k : path) visited.erase(k);  // バックトラック
+        return result;
     }
     
     return false;
