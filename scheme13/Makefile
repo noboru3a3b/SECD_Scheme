@@ -21,14 +21,20 @@ GC_LIB        = -L/usr/local/lib -lgc -lgccpp
 TARGET = $(HERE)/scheme13
 SOURCE = $(HERE)/scheme13.cpp
 
-.PHONY: all clean test bench help
+.PHONY: all clean selftest test bench help
 
 all: $(TARGET)
 
 $(TARGET): $(SOURCE)
 	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $@ $< $(GC_LIB)
 
-# 既存 .scm 資産との互換性回帰（受け入れ基準そのもの）
+# 凍結仕様（dev_memo.md §2.1 / §2.5）との突き合わせ。
+# コンパイラと VM が無い段階でも走る。セクション 3〜5 の回帰はこれ。
+selftest: $(TARGET)
+	@$(TARGET) --selftest
+
+# 既存 .scm 資産との互換性回帰（受け入れ基準そのもの）。
+# セクション 8〜11 が入るまでは走らない。
 test: $(TARGET)
 	@cd $(ROOT) && $(HERE)/tests/run_golden.sh $(TARGET)
 
@@ -43,7 +49,8 @@ clean:
 
 help:
 	@echo "scheme13 targets:"
-	@echo "  all    - ビルド"
-	@echo "  test   - 既存 .scm 資産との互換性回帰（ゴールデン比較）"
-	@echo "  bench  - 呼び出し性能のベンチ（scheme12 は約3.4秒）"
-	@echo "  clean  - 生成物を削除"
+	@echo "  all      - ビルド"
+	@echo "  selftest - 凍結仕様との突き合わせ（セクション3〜5の回帰）"
+	@echo "  test     - 既存 .scm 資産との互換性回帰（ゴールデン比較）"
+	@echo "  bench    - 呼び出し性能のベンチ（scheme12 は約3.4秒）"
+	@echo "  clean    - 生成物を削除"
