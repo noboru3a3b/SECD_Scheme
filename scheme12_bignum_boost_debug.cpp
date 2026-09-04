@@ -3,6 +3,7 @@
 // Part 1
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <climits>  // LLONG_MAX用に明示的に追加
 #include <cstdio>
 #include <filesystem>
@@ -2477,12 +2478,29 @@ static ValuePtr prim_newline(const ValueVec& args) {
 }
 
 // File I/O primitives
+
+// FilePort のデストラクタ（＝fclose）は GC のファイナライザ経由でしか走らない。
+// 到達不能になったポートが未回収のままだとディスクリプタが尽きることがあるので、
+// EMFILE/ENFILE のときだけ回収とファイナライザ実行を促してから1回だけ再試行する。
+// GC_gcollect() は回収するだけでファイナライザをキューに積むので、
+// GC_invoke_finalizers() まで呼んで実際に fclose させる。
+// それ以外のエラー（ENOENT など）で GC を走らせても無駄なので即座に諦める。
+static std::FILE* fopen_with_gc_retry(const char* path, const char* mode) {
+    errno = 0;
+    std::FILE* fp = std::fopen(path, mode);
+    if (fp) return fp;
+    if (errno != EMFILE && errno != ENFILE) return nullptr;
+    GC_gcollect();
+    GC_invoke_finalizers();
+    return std::fopen(path, mode);
+}
+
 static ValuePtr prim_open_input_file(const ValueVec& args) {
     if (args.size() != 1 || !std::holds_alternative<GcString>(args[0]->data)) {
         vm_error("open-input-file expects a string path");
     }
     std::string path = to_std(std::get<GcString>(args[0]->data));
-    std::FILE* fp = std::fopen(path.c_str(), "rb");
+    std::FILE* fp = fopen_with_gc_retry(path.c_str(), "rb");
     if (!fp) {
         vm_error("open-input-file: cannot open file: " + path);
     }
@@ -2495,7 +2513,7 @@ static ValuePtr prim_open_output_file(const ValueVec& args) {
         vm_error("open-output-file expects a string path");
     }
     std::string path = to_std(std::get<GcString>(args[0]->data));
-    std::FILE* fp = std::fopen(path.c_str(), "wb");
+    std::FILE* fp = fopen_with_gc_retry(path.c_str(), "wb");
     if (!fp) {
         vm_error("open-output-file: cannot open file: " + path);
     }
