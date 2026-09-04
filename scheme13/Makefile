@@ -4,8 +4,9 @@
 #     make -f scheme13/Makefile
 #     make -C scheme13
 #
-# 注意: 処理系は起動時に cwd から system_lib.scm を読むため、
-#       実行と test は必ずリポジトリのルートから行うこと。
+# 起動時ライブラリ（system_lib.scm）は実行ファイルの隣・その1つ上・cwd・
+# cwd の1つ上の順に探すので、どこから起動してもよい（7日目の決定39）。
+# 明示したいときは SCHEME13_LIB にパスを入れる。
 
 # このMakefile自身の位置。呼び出し元のディレクトリに依存しないようにする。
 HERE  := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))

@@ -12,8 +12,9 @@
 # 採り直してある（出力が処理系自身のエラー文言だから。理由は golden/README.md）。
 # そのため **./scheme12_debug を渡すと 11/12 になる**。これは正常。
 #
-# 注意: 処理系は起動時に cwd から system_lib.scm を読むため、必ず
-# リポジトリのルートで実行すること（このスクリプトが自分で移動する）。
+# ゴールデンの後に、**起動時ライブラリがどこから起動しても読めること**も見る。
+# 7日目まで scheme13 は実行ファイルの隣と cwd しか見ておらず、リポジトリの
+# ルート以外から起動すると reverse / map / append などが黙って消えていた。
 
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -53,6 +54,32 @@ for f in $FILES; do
         fail=$((fail + 1))
     fi
 done
+
+# --- 起動時ライブラリの探索（決定39）------------------------------------
+# どの cwd から起動しても system_lib.scm が読めること。ここが壊れると
+# 約60個の手続きが黙って消えるが、ゴールデンは全部ルートから走るので
+# 気づけない。だから cwd を変えて確かめる。
+probe=$(mktemp)
+echo '(reverse (list 1 2 3))' > "$probe"
+ABS_INTERP=$(cd "$(dirname "$INTERP")" && pwd)/$(basename "$INTERP")
+
+for dir in "$ROOT" "$ROOT/scheme13" "$ROOT/scheme13/tests"; do
+    set +e
+    out=$(cd "$dir" && "$ABS_INTERP" --load "$probe" 2>&1)
+    set -e
+    if [ "$out" = "(3 2 1)" ]; then
+        printf '  PASS  startup library from %s
+' "${dir#"$ROOT"/}"
+        pass=$((pass + 1))
+    else
+        printf '  FAIL  startup library from %s
+' "${dir#"$ROOT"/}"
+        printf '        got: %s
+' "$out"
+        fail=$((fail + 1))
+    fi
+done
+rm -f "$probe"
 
 # test_improvements.scm が消し損ねる一時ファイル
 rm -f test-eof-temp.txt

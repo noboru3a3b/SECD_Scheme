@@ -3466,16 +3466,41 @@ static ValuePtr load_library_dedup(const std::string& path) {
     return last;
 }
 
-// 実行ファイルの隣 → カレントディレクトリ の順に探す
+// 起動時ライブラリ（system_lib.scm）を探して読む。
+//
+// **これが見つからないと reverse / map / append など約60個が丸ごと消える。**
+// scheme12 は実行ファイルがリポジトリのルート（system_lib.scm の隣）に
+// 置かれていたので「実行ファイルの隣 → cwd」の2箇所で足りていたが、
+// scheme13 の実行ファイルは scheme13/ の中にあり、その隣に system_lib.scm は
+// 無い。結果、リポジトリのルート以外から起動すると**黙って**ライブラリを
+// 失っていた（7日目に発覚。決定39）。
+//
+// 探索順。先に見つかったものを使う:
+//   1. 環境変数 SCHEME13_LIB（明示指定。ファイルへのパス）
+//   2. 実行ファイルの隣
+//   3. 実行ファイルの1つ上（scheme13/scheme13 → リポジトリのルート）
+//   4. カレントディレクトリ
+//   5. カレントディレクトリの1つ上
+//
+// **どれも見つからなければ黙らずに警告する。** 黙って縮退するのが最も困る。
 static void load_startup_libraries(const char* argv0) {
     RootVec<std::string> candidates;
+
+    if (const char* env = std::getenv("SCHEME13_LIB"); env && *env)
+        candidates.push_back(env);
+
     if (argv0 && *argv0) {
         std::string exe(argv0);
         std::size_t slash = exe.find_last_of('/');
-        if (slash != std::string::npos)
-            candidates.push_back(exe.substr(0, slash + 1) + "system_lib.scm");
+        if (slash != std::string::npos) {
+            std::string dir = exe.substr(0, slash + 1);
+            candidates.push_back(dir + "system_lib.scm");
+            candidates.push_back(dir + "../system_lib.scm");
+        }
     }
     candidates.push_back("system_lib.scm");
+    candidates.push_back("../system_lib.scm");
+
     for (const std::string& path : candidates) {
         try {
             load_library_dedup(path);
@@ -3484,6 +3509,15 @@ static void load_startup_libraries(const char* argv0) {
             // 次の候補へ
         }
     }
+
+    std::fprintf(stderr,
+                 "scheme13: warning: system_lib.scm not found; the standard library "
+                 "(reverse, map, append, ...) is unavailable.\n"
+                 "  looked in:\n");
+    for (const std::string& path : candidates)
+        std::fprintf(stderr, "    %s\n", path.c_str());
+    std::fprintf(stderr, "  set SCHEME13_LIB to its path, or run from the "
+                         "directory that holds it.\n");
 }
 
 // --- 自己テスト（凍結仕様との突き合わせ） ----------------------------------

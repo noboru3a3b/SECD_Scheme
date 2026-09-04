@@ -1006,6 +1006,43 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
     - `code` 特殊形式と有理数は入れない（8日目以降も入れない。前者は使い道が
       無く、後者は §2.2 の「整数のみ」を壊す）
 
+39. **起動時ライブラリ（`system_lib.scm`）の探索を直し、失敗を黙らせない。**
+    利用者から「`reverse` が登録されていない」という報告があり、調べたところ
+    **scheme13 はリポジトリのルート以外から起動すると、約60個の手続きを
+    黙って失っていた。**
+    - 原因は探索経路ではなく**実行ファイルの置き場所**。scheme12 の探索は
+      「実行ファイルの隣 → cwd」で、`scheme12_debug` はリポジトリのルート
+      （`system_lib.scm` の隣）に置かれていたので常に当たっていた。
+      scheme13 の実行ファイルは `scheme13/` の中にあり、その隣に
+      `system_lib.scm` は無い。**同じコードで結果だけが違っていた**
+    - 探索順を「`SCHEME13_LIB` → 実行ファイルの隣 → その1つ上 → cwd →
+      cwd の1つ上」に広げた。`scheme13/scheme13` の1つ上がリポジトリのルート
+      になるので、置き場所と探索が噛み合う
+    - **どれも見つからなければ stderr に警告し、探した場所を全部並べる。**
+      黙って縮退するのが最も困る。これが無かったせいで
+      「関数が登録されていない」という誤った結論に至った
+    - 却下案: `system_lib.scm` を `scheme13/` にコピーする。同じファイルが
+      2箇所に増え、どちらが正かの問題を作るだけなので却下
+
+40. **「機能が scheme12 と同等か」は名前の集合で実測して答える。**
+    §7 の「登録名に欠けなし」は文章としては正しかったが、**確かめ方が
+    書いていなかった**ので疑いを晴らせなかった。以後この主張はこう測る:
+
+    ```sh
+    printf '(globals)\n' | ./scheme12_debug   | grep ' : ' | sed 's/ : .*//' | sort > /tmp/g12
+    printf '(globals)\n' | ./scheme13/scheme13 | grep ' : ' | sed 's/ : .*//' | sort > /tmp/g13
+    comm -23 /tmp/g12 /tmp/g13    # scheme12 にあって scheme13 に無いもの → 空であること
+    ```
+
+    7日目の実測: **差はゼロ**。scheme13 は scheme12 の 156 個をすべて持ち、
+    `test-start` / `test-end` / `macroexpand-1` / `macroexpand` の4個が多い。
+    - 内訳は プリミティブ99 + 特殊形式19 + `system_lib.scm` が定義する38個
+    - **`abs` / `assoc` / `member` / `list-ref` / `even?` / `max` / `min` /
+      `sort` / `expt` / `sqrt` などは scheme12 にも無い。** 両方に無いものを
+      「scheme13 の欠落」と読み違えないこと。増やすかどうかは §1.1
+      （機能追加の誘惑に負けない）に照らして**利用者と決める**話であり、
+      同等性の話ではない
+
 **この日やったこと**
 
 - セクション2 に `detail()` / `expected_given()` / `internal_error()`
@@ -1023,6 +1060,9 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
   **126 → 146 checks**
 - `Makefile` の `bench` が `/bin/sh` が dash の環境で動かなかったのを修正
   （`time` は bash の組み込み）。`bench: SHELL := /bin/bash`
+- セクション12 の `load_startup_libraries` を書き直し（決定39）。
+  `tests/run_golden.sh` に **cwd を変えて起動する回帰3件**を追加（12 → 15件）。
+  ゴールデンは全部ルートから走るので、この壊れ方には気づけなかった
 
 **分かったこと**
 
@@ -1064,7 +1104,7 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
   | 9 命令セット | ✅ 逆アセンブル込み（**ファイル上は 8 より前**。決定24） |
   | 8 コンパイラ | ✅ |
   | 10 VM | ✅ |
-  | 11 プリミティブ | ✅ **99個**（＋特殊形式19個）。scheme12 の登録名に欠けなし（+ test-start / test-end / macroexpand-1 / macroexpand） |
+  | 11 プリミティブ | ✅ **99個**（＋特殊形式19個、＋`system_lib.scm` の38個 = 大域名160個）。**scheme12（156個）との差は実測ゼロ**（測り方は決定40） |
   | 12 起動 | ✅ REPL / `--load` / `--selftest` / `--read` / `--expand` |
 - `scheme13/Makefile` — ✅（`all` / `selftest` / `compare` / `test` / `bench` / `clean`）
 - `scheme13/tests/` — ✅ ゴールデン12件 + 展開の等価性検証 + README
@@ -1076,7 +1116,8 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
 ```sh
 make -C scheme13 selftest     # 146 checks, 0 failed（セクション 3〜11 の回帰）
 make -C scheme13 compare      #  15 passed, 0 failed（展開が scheme12 と等価）
-make -C scheme13 test         #  12 passed, 0 failed  ← 受け入れ基準
+make -C scheme13 test         #  15 passed, 0 failed  ← 受け入れ基準
+                              #  （ゴールデン12件 + 起動時ライブラリ3件）
 make -C scheme13 bench        # 100万回で約 0.12 秒（scheme12 は約 3.3 秒）
 ```
 
@@ -1119,7 +1160,18 @@ scheme12（`scheme12_bignum_boost_debug.cpp`）には**まだ触れていない*
    - マクロ展開のメモ化（原典がやっている。`micro_scheme8_notes.md` §3.6）
    - `LD` の環境たどりを、深さ0の場合に特化する
 
-4. **エラーの回帰をゴールデン側でも見るか。** 7日目に分かったとおり、既存の
+4. **`abs` / `assoc` / `member` / `list-ref` / `even?` / `max` / `min` /
+   `sort` / `expt` / `sqrt` を足すか、利用者と決める。** これらは
+   **scheme12 にも無い**ので同等性の話ではなく、純粋な機能追加である
+   （決定40）。§1.1 は「機能追加の誘惑に負けないこと」と言っているので、
+   **勝手に足さない。** 足すと決めたなら置き場所は `system_lib.scm`
+   （C++ ではなく Scheme。プリミティブを増やす理由が無い）。
+   ただし `system_lib.scm` は scheme12 と共有している既存資産なので、
+   触るとゴールデン12件すべてに影響する。**別ファイル
+   （`scheme13/lib13.scm` など）に置いて追加で読む**ほうが安全か、
+   これも含めて相談する。
+
+5. **エラーの回帰をゴールデン側でも見るか。** 7日目に分かったとおり、既存の
    .scm 資産はエラーを踏まないので、ゴールデン12件はエラーの文面を1つも
    見ていない。いまは `selftest_errors()` が固定しているが、
    「エラーを踏むだけの .scm」をゴールデンに1本足す手もある。
