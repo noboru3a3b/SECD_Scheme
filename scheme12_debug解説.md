@@ -1,8 +1,9 @@
-# scheme12_debug 解説文書（最新版 v2.0）
+# scheme12_debug 解説文書（最新版 v2.1）
 
 SECD 仮想マシン方式 Scheme コンパイラ兼実行系「scheme12_debug」の設計と実装の解説
 
-**最終更新**: 2026年8月（赤黒木ライブラリ堅牢性強化版）
+**最終更新**: 2026年9月（堅牢性・R5RS適合性の改善版）
+（v2.0: 2026年8月、赤黒木ライブラリ堅牢性強化版）
 （初版: 2024年1月、循環構造対応・安全性改善版）
 
 ---
@@ -23,7 +24,8 @@ SECD 仮想マシン方式 Scheme コンパイラ兼実行系「scheme12_debug�
 12. [互換性ノート](#12-互換性ノート)
 13. [実装上の注意・拡張ポイント](#13-実装上の注意拡張ポイント)
 14. [**最近の改善（v2.0）**](#14-最近の改善v20)
-15. [**赤黒木ライブラリの堅牢性強化**](#15-赤黒木ライブラリの堅牢性強化) ← **NEW!**
+15. [**赤黒木ライブラリの堅牢性強化**](#15-赤黒木ライブラリの堅牢性強化)
+16. [**最近の改善（v2.1）**](#16-最近の改善v21) ← **NEW!**
 
 付録
 - [A. コンパイル出力と逆アセンブル例](#付録a-コンパイル出力と逆アセンブル例)
@@ -93,7 +95,17 @@ SECD 仮想マシン方式 Scheme コンパイラ兼実行系「scheme12_debug�
 - ✅ **コンパイラ出力確認**: 生成コードの検証
 - ✅ **グローバル変数・マクロ一覧**: システム状態の可視化
 
-#### v2.0 新機能 ✨
+#### v2.1 新機能 ✨ ← **NEW!**
+
+- ✅ **循環構造対応の完成**: car方向の循環も検出。長いリストのequal?でスタックを溢れさせない
+- ✅ **リーダの入力終端検出**: 閉じ括弧のないファイルで無限ループしない
+- ✅ **ポートの自動回収**: 閉じ忘れてもディスクリプタが枯渇しない
+- ✅ **内部define**: 本体先頭のdefineがレキシカル束縛になる（グローバルを汚さない）
+- ✅ **準クオートの拡充**: ドット位置・ベクタ内の`unquote`に対応
+- ✅ **call-with-current-continuation**: R5RSの正式名をサポート
+- ✅ **特殊形式の構文検査**: フォーム名と該当式つきのエラーメッセージ
+
+#### v2.0 新機能
 
 - ✅ **循環構造対応**: equal?とto_stringで無限ループ回避
 - ✅ **#t/#f サポート**: 標準Scheme構文の追加
@@ -300,7 +312,7 @@ struct Continuation : public gc {
     ValueVec e;           // 環境
     CodePtr c;            // コード
     std::size_t pc;       // プログラムカウンタ
-    DumpFrameVec d;       // ダンプ
+    DumpPtr d;            // ダンプ（永続リンクリストの先頭ノード）
 };
 ```
 
@@ -331,25 +343,45 @@ scheme12> (call/cc (lambda (k) k))
 | 特殊形式       | `#<special-form:if>`        | 形式名表示                   |
 | **EOF**        | `#<eof>`                    | **✨ v2.0**: 専用オブジェクト |
 
-### 2.4 循環構造の扱い（v2.0）✨
+### 2.4 循環構造の扱い（v2.1 で完成）✨
+
+`visited` は「いま辿っている経路上にあるノード」の集合（ancestor set）です。
+走査を終えたら自分が入れた分を取り除く（バックトラックする）ことで、
+循環は検出しつつ、共有構造（DAG）を循環と誤判定しないようにしています。
 
 #### equal? の循環検出
 
-**アルゴリズム**: ノード対応マップによる追跡
+**アルゴリズム**: ノード対応マップによる追跡＋cdr 方向はループ
 
 ```cpp
 using VisitedMap = std::unordered_map<void*, void*>;
 
-bool value_equal_with_visited(ValuePtr a, ValuePtr b, VisitedMap& visited) {
-    // 既訪問ノードの対応関係を確認
-    if (visited.count(addr_a)) {
-        return visited[addr_a] == addr_b;  // 対応が一致するか
+// cdr 方向は再帰ではなくループで辿る。car だけ再帰する。
+// スパン上のノードは path に貯め、比較を終えたらまとめて visited から外す。
+static bool value_equal_with_visited(ValuePtr a, ValuePtr b, VisitedMap& visited) {
+    if (both_pairs(a, b)) {
+        std::vector<void*> path;
+        bool result;
+        for (;;) {
+            auto it = visited.find(addr_a);
+            if (it != visited.end()) { result = (it->second == addr_b); break; }
+            visited[addr_a] = addr_b;
+            path.push_back(addr_a);
+            if (!value_equal_with_visited(car(a), car(b), visited)) { result = false; break; }
+            a = cdr(a); b = cdr(b);          // ← 再帰せずループ
+            ...
+        }
+        for (void* k : path) visited.erase(k);   // バックトラック
+        return result;
     }
-    // 訪問記録して再帰比較
-    visited[addr_a] = addr_b;
-    // ... 要素の比較 ...
+    ...
 }
 ```
+
+**cdr をループにしている理由**: v2.0 では cdr も再帰していたため、
+20万要素程度のリスト同士を `equal?` で比較すると C スタックが溢れて
+SIGSEGV していました。car の再帰だけならネストの深さに比例するので、
+現実的な深さでは溢れません。
 
 **動作例**:
 
@@ -358,23 +390,39 @@ scheme12> (define a (cons 1 (cons 2 nil)))
 scheme12> (set-cdr! (cdr a) a)
 scheme12> (equal? a a)
 TRUE  ; 無限ループせず正しく判定
+
+scheme12> (define (range n acc) (if (= n 0) acc (range (- n 1) (cons n acc))))
+scheme12> (equal? (range 200000 '()) (range 200000 '()))
+TRUE  ; v2.1 以降はスタックを溢れさせない（v2.0 では SIGSEGV）
 ```
 
 #### to_string の循環検出
 
-**アルゴリズム**: 訪問済みセットによる追跡
+**アルゴリズム**: 訪問済みセットによる追跡（car 方向も含む）
 
 ```cpp
 std::unordered_set<void*> visited;
 
-std::string to_string_with_visited(ValuePtr v, std::unordered_set<void*>& visited) {
+static std::string to_string_with_visited(ValuePtr v, std::unordered_set<void*>& visited) {
     if (visited.count(addr)) {
         return "#<circular>";  // または "#<circular-vector>"
     }
     visited.insert(addr);
-    // ... 要素の文字列化 ...
+    // ... 要素の文字列化。car へ降りるときも同じ visited を引き回す ...
     visited.erase(addr);  // バックトラック
 }
+```
+
+**重要**: リストの cdr 鎖を辿るループから car を出力するときは、
+`to_string()` ではなく `to_string_with_visited(car(ls), visited)` を呼ぶ
+必要があります。v2.0 では前者を呼んでいたため visited が毎回作り直され、
+car 方向の循環が検出できずスタックを溢れさせていました。
+
+```scheme
+scheme12> (define x (list 1 2))
+scheme12> (set-car! x x)
+scheme12> x
+(( . #<circular>) 2)   ; v2.1 以降。v2.0 では SIGSEGV
 ```
 
 ---
@@ -516,6 +564,27 @@ scheme12> (define (fact n)
 fact
 ```
 
+#### 入力終端の扱い（v2.1）✨
+
+`read_expr()` は入力を使い切ると `nullptr` を返します。`read_list()` と
+`read_vector()` はこれを検出して打ち切る必要があります。
+
+```cpp
+ValuePtr x = read_expr();
+if (!x) vm_error("unexpected EOF in list");
+items.push_back(x);
+```
+
+v2.0 ではこの検査がなく、閉じ括弧のないファイルを `--load` すると
+`nullptr` を積み続けて無限ループし、メモリを食い潰して `std::bad_alloc`
+で落ちていました。REPL は `is_balanced()` が守っていたため、
+`--load` と `read-expr` でのみ表面化する問題でした。
+
+```
+$ ./scheme12_debug --load unbalanced.scm
+Fatal error: scheme12 VM error: unexpected EOF in list
+```
+
 ---
 
 ## 4. コンパイラ（Compiler）
@@ -567,7 +636,7 @@ std::optional<std::pair<int, int>> location_of(
 (if test then-expr else-expr)
 ```
 
-生成コード：
+**非末尾位置**（`SEL` + `JOIN`）:
 ```
 [コンパイル test]
 SEL then-code else-code
@@ -581,6 +650,24 @@ else-code:
   [コンパイル else-expr]
   JOIN
 ```
+
+**末尾位置**（`SELR` + `RTN`）:
+```
+[コンパイル test]
+SELR then-code else-code
+
+then-code:
+  [コンパイル then-expr]
+  RTN            ; JOIN ではなく RTN
+
+else-code:
+  [コンパイル else-expr]
+  RTN
+```
+
+末尾位置の `if` で `SEL` を使うと、分岐のたびにダンプへ退避してしまい、
+分岐の中の末尾呼出が積み上がって末尾呼出最適化が効かなくなります。
+`SELR` は退避せず、分岐は `RTN` で直接呼出し元へ戻ります。
 
 #### 4.3.2 関数定義（lambda）
 
@@ -631,6 +718,85 @@ TAPP  ; Dにスタックフレームを積まない
 
 - `rest`にリストとして残りの引数をすべて渡す
 - フレーム構成: `[x, y, rest-list]`
+
+#### 4.3.5 内部 define（v2.1）✨
+
+本体の先頭に並ぶ `define` は、コンパイル前に `letrec` へ書き換えられます
+（R5RS 5.2.2 の scan out defines）。
+
+```scheme
+(lambda (x)
+  (define y (* x 2))
+  (define (g k) (* y k))
+  (g 3))
+        ↓
+(lambda (x)
+  (letrec ((y (* x 2))
+           (g (lambda (k) (* y k))))
+    (g 3)))
+```
+
+`letrec` は `(let ((v :undef) ...) (set! v ...) ... body)` へ展開されるので、
+逐次初期化（letrec* 相当）になり、内部 define の意味論と一致します。
+
+**この変換が必要な理由**: 変換しないと `define` は `Op::DEF`（グローバルへの
+代入）にコンパイルされ、内部の補助関数は `Op::LDG` でグローバルを引きます。
+すると同名の補助関数を持つ別の関数を定義した時点で後勝ちで上書きされ、
+先に作ったクロージャが壊れます。
+
+```scheme
+(define (make-f n) (define (helper x) (* x 2)) (lambda () (helper n)))
+(define (make-g n) (define (helper x) (* x 3)) (lambda () (helper n)))
+(define ff (make-f 5))
+(define gg (make-g 5))
+(list (ff) (gg) (ff))
+;; v2.0: (15 15 15)   ← ff まで make-g の helper を見てしまう
+;; v2.1: (10 15 10)   ← 正しい
+```
+
+**適用範囲**: 呼び出しは `comp()` の `lambda` の分岐のみです。`let` / `let*` /
+名前付き `let` / `do` はすべて `lambda` へ展開されてから `comp` に戻るので
+自動的にカバーされ、トップレベルや `begin` の `define` は従来どおり
+グローバル定義のまま残ります。`letrec` は本物の `lambda` に展開されるので、
+外側の引数参照の `Op::LD` の深さは `location_of` が再計算します。
+
+**対象外**（従来どおりグローバルになります）:
+- 式より後ろに書かれた `define`（R5RS でも未定義）
+- マクロが生成した本体先頭の `define`（scan はマクロ展開の前に走るため）
+- 本体先頭の `(begin (define ...) ...)` のスプライス
+
+#### 4.3.6 構文検査（v2.1）✨
+
+特殊形式の分解を素の `car`/`cdr` に任せると、構文エラーがほぼすべて
+`expected pair` という同じ無情報なメッセージになります。v2.1 では
+共通ヘルパーを設けて、フォーム名・期待する形・実際に書かれた式を
+添えて報告します。
+
+| ヘルパー | 役割 |
+|---|---|
+| `syntax_error()` | 引数リスト `rest` から `(form . rest)` を復元して表示する |
+| `check_arity()` | 引数の個数を検査する（ドットリストも検出） |
+| `check_bindings()` | `let`/`let*`/`letrec` の束縛が `(variable expression)` であることを検査する |
+
+```
+(define x)         → bad syntax in define: variable definition needs
+                     a value expression -- in (define x)
+(if a b c d)       → bad syntax in if: expects 2 to 3 argument(s),
+                     got 4 -- in (if a b c d)
+(let ((x)) x)      → bad syntax in let: each binding must be
+                     (variable expression) -- in (let ((x)) x)
+(do ((i)) (#t) 1)  → bad syntax in do: each spec must be
+                     (variable init [step]) -- in (do ((i)) (TRUE) 1)
+(lambda 5 1)       → bad syntax in lambda: parameter list must be symbols,
+                     e.g. (x y) or (x . rest) -- in (lambda 5 1)
+```
+
+適用先は `quote` / `quasiquote` / `if` / `lambda` / `define` /
+`define-macro` / `set!` / `call/cc` / `apply`（`comp` 内）と
+`let` / `let*` / `letrec` / `cond` / `case` / `do`（`expand_*` 内）です。
+
+なお `(if a b c d)` や `(define x 1 2)` は v2.0 では**黙って余分な引数を
+無視していました**が、v2.1 ではエラーになります。
 
 ### 4.4 マクロ展開
 
@@ -731,9 +897,9 @@ TAPP  ; Dにスタックフレームを積まない
 
 | 命令 | 引数 | 動作 | 説明 |
 |------|------|------|------|
-| **SEL** | ct, cf | 条件分岐（Dに退避） | 真ならct、偽ならcf |
-| **SELR** | ct, cf | 条件分岐（退避なし） | 未使用（将来用） |
-| **JOIN** | - | 分岐から復帰 | Dから復元 |
+| **SEL** | ct, cf | 条件分岐（Dに退避） | 非末尾位置の`if`。分岐は`JOIN`で終わる |
+| **SELR** | ct, cf | 条件分岐（Dに退避しない） | 末尾位置の`if`。分岐は`RTN`で終わる |
+| **JOIN** | - | 分岐から復帰 | Dから復元（`c`と`pc`のみ使う） |
 | **STOP** | - | 実行終了 | 結果をスタックトップから取得 |
 
 #### 5.2.4 変数操作
@@ -749,8 +915,12 @@ TAPP  ; Dにスタックフレームを積まない
 
 | 命令 | 引数 | 動作 | 説明 |
 |------|------|------|------|
+| **CALLCC** | - | call/cc実行（Dに退避） | 継続を引数として関数適用 |
+| **TCALLCC** | - | 末尾位置のcall/cc（Dに退避しない） | 末尾位置でTCOを効かせる |
 | **LDCT** | - | 継続を作成してスタックに積む | 現在の(S,E,C,pc,D)をスナップショット |
-| **CALLCC** | - | call/cc実行 | 継続を引数として関数適用 |
+
+**注**: `LDCT` はコンパイラが生成しないデッドコードです（VM 側の実装のみ
+残っています）。継続の捕捉は `CALLCC` / `TCALLCC` が行います。
 
 #### 5.2.6 その他
 
@@ -890,23 +1060,45 @@ struct Continuation : public gc {
     ValueVec e;           // 現在の環境
     CodePtr c;            // 現在のコード
     std::size_t pc;       // 現在のPC
-    DumpFrameVec d;       // 現在のダンプ
+    DumpPtr d;            // 現在のダンプ（永続リンクリストの先頭）
 };
 ```
 
-#### CALLCC命令の動作
+ダンプは不変ノードの永続リンクリストです。push はノード1個の確保、pop は
+ポインタの付け替えなので、継続の捕捉は「いまの先頭ポインタを持つ」だけの
+O(1) で済みます。ノードが不変なので、捕捉後に VM 側が push/pop しても
+捕捉済みの鎖は壊れません。
+
+#### CALLCC / TCALLCC 命令の動作
 ```
 1. スタックから関数を取得
 2. 現在の (S, E, C, pc, D) を継続として作成
 3. 継続を引数として関数に適用
-   ※ 通常のAPPと同じ流れ
+   ※ 通常のAPP / TAPPと同じ流れ
+   ※ CALLCC はDに退避し、TCALLCC は退避しない（末尾位置でTCOを効かせる）
 ```
+
+引数に渡せるのはクロージャ、プリミティブ、そして**継続**です。R5RS では
+継続も1引数の手続きなので `(call/cc k)` は有効で、「いまの継続を引数にして
+`k` へ脱出する」ことを意味します（v2.1 で対応）。
 
 #### 継続の適用
 ```
 1. 継続が呼ばれると、保存された状態を復元
 2. 引数の値をスタックに積む
 3. 継続が作られた時点に戻る
+   ※ 状態をまるごと差し替えるので、ダンプは積まない
+```
+
+#### 名前（v2.1）✨
+
+R5RS の正式名 `call-with-current-continuation` も `call/cc` と同じに
+扱われます。どちらで書いても同じコードが生成され、構文エラーの
+メッセージには実際に書かれたほうの名前が出ます。
+
+```scheme
+scheme12> (call-with-current-continuation (lambda (k) (k 41)))
+41
 ```
 
 #### 実例
@@ -945,6 +1137,16 @@ scheme12> (escape 100)
 - 変数に代入可能
 - 関数の引数・返り値として渡せる
 - クロージャの中に捕捉可能
+- `call/cc` の引数としても渡せる（v2.1）
+
+**制約**
+- `call/cc` 自身は特殊形式であって値ではありません。`(procedure? call/cc)`
+  は `FALSE` で、高階関数に渡したり変数に束縛したりはできません
+  （`apply` も同様）。
+- トップレベルのフォームはそれぞれ別の VM で評価されるため、あるフォームで
+  捕捉した継続を別のフォームから起動すると、そのフォームの残りは実行されず
+  次のトップレベルフォームへ進みます。ジェネレータやコルーチンのように
+  何度も再入する用途では、一連の処理を1つの `begin` にまとめてください。
 
 **実用例：非局所脱出**
 ```scheme
@@ -1065,6 +1267,44 @@ scheme12> `(x is ,x and elements are ,@lst)
 ↓
 (cons 'a (cons b (append c '())))
 ```
+
+#### ドット位置の unquote（v2.1）✨
+
+`` `(a . ,x) `` はリーダで `(a unquote x)` と読まれます。`qq_transfer` が
+cdr へ降りた先で `ls` 自身が `(unquote x)` になるので、ここを拾って値に
+置き換える必要があります。R5RS では `` `(unquote x) `` と `,x` は等価なので、
+この置き換えは常に正しくなります。
+
+```scheme
+(define k 'name) (define v 42)
+
+`(,k . ,v)     ; v2.0: (name unquote v)   → v2.1: (name . 42)
+`(1 2 . ,v)    ; v2.0: (1 2 unquote v)    → v2.1: (1 2 . 42)
+```
+
+`` `(,key . ,val) `` は連想リストのエントリやドット対を組み立てるマクロの
+定番イディオムです。v2.0 ではエラーにならず3要素のリストが黙って
+下流へ流れていたため、発見が難しい種類の不具合でした。
+
+なお R5RS で不正な `` `(a . ,@x) `` は、壊れた結果を返す代わりに
+`unquote-splicing is not allowed in dotted tail position` を投げます。
+
+#### ベクタ内の unquote（v2.1）✨
+
+ベクタリテラルの中でも `,` / `,@` が働きます。要素をリストに直して
+変換し、`list->vector` で戻す形で実装しています。
+
+```scheme
+(define x 7) (define b '(9 9))
+
+`#(1 ,x)       ; v2.0: #(1 (unquote x))   → v2.1: #(1 7)
+`#(,@b 3)      ;                          → v2.1: #(9 9 3)
+```
+
+#### 未対応
+
+ネストした準クオート（`` `(a `(b ,,x)) ``）はクオート深度の追跡が必要で、
+未対応です。
 
 ### 7.4 組み込み構文展開
 
@@ -1414,6 +1654,38 @@ Error: vector-ref: integer out of range for conversion
 (define lines (read-all-lines in))
 (close-input-port in)
 ```
+
+**✨ v2.1: ポートの自動回収**
+
+`FilePort` は `gc` ではなく `gc_cleanup` を継承します。`gc` 継承だけでは
+デストラクタが一度も呼ばれず、到達不能になったポートの `FILE*` が
+閉じられないままディスクリプタを食い潰していました（`close` を忘れて
+数百個開くと `EMFILE`）。`gc_cleanup` はファイナライザを登録し、
+回収時に `~FilePort` を実行します。
+
+ただしファイナライザは GC が走ったときにしか実行されないため、確保が
+少ないループでは回収が間に合わないことがあります。そこで
+`open-input-file` / `open-output-file` が使う `fopen` をラップし、
+`EMFILE`/`ENFILE` で失敗したときだけ回収を促してから1回だけ再試行します。
+
+```cpp
+static std::FILE* fopen_with_gc_retry(const char* path, const char* mode) {
+    errno = 0;
+    std::FILE* fp = std::fopen(path, mode);
+    if (fp) return fp;
+    if (errno != EMFILE && errno != ENFILE) return nullptr;
+    GC_gcollect();
+    GC_invoke_finalizers();   // 回収するだけでは足りず、ここまで呼ぶ
+    return std::fopen(path, mode);
+}
+```
+
+`GC_gcollect()` はファイナライザをキューに積むだけなので、
+`GC_invoke_finalizers()` まで呼んで実際に `fclose` させるのがポイントです。
+`ENOENT` など他のエラーで GC を走らせても無駄なので即座に諦めます。
+
+**とはいえ、ポートは明示的に閉じるのが基本です。** 上の仕組みは
+閉じ忘れに対する保険であって、正しい作法の代わりにはなりません。
 
 #### 8.1.12 乱数
 
@@ -3512,21 +3784,34 @@ project/
 
 scheme12は教育・実験用途のため、R5RS/R7RSとは一部異なります：
 
-| 機能             | R5RS/R7RS          | scheme12                      |
-| ---------------- | ------------------ | ----------------------------- |
-| 数値塔           | 完全               | 整数のみ                      |
-| **真偽値表記**   | **`#t` / `#f`**    | **✅ v2.0でサポート**          |
-| マクロ           | syntax-rules       | define-macro                  |
-| モジュール       | ✅ (R7RS)           | ❌                             |
-| 例外処理         | ✅                  | ❌（call/ccで代用）            |
-| 遅延評価         | delay/force        | ✅                             |
-| 継続             | call/cc            | ✅                             |
-| **単一引数除算** | **`(/ x)` = 逆数** | **❌（v2.0で明示的にエラー）** |
-| **角括弧**       | **`[]` = `()`**    | **❌ 未サポート**              |
+| 機能                     | R5RS/R7RS                | scheme12                          |
+| ------------------------ | ------------------------ | --------------------------------- |
+| 数値塔                   | 完全                     | 整数のみ                          |
+| **真偽値表記**           | **`#t` / `#f`**          | **✅ v2.0でサポート**              |
+| マクロ                   | syntax-rules             | define-macro                      |
+| モジュール               | ✅ (R7RS)                 | ❌                                 |
+| 例外処理                 | ✅                        | ❌（call/ccで代用）                |
+| 遅延評価                 | delay/force              | ✅                                 |
+| 継続                     | call/cc                  | ✅                                 |
+| **継続の正式名**         | **call-with-current-continuation** | **✅ v2.1でサポート**    |
+| **`(call/cc k)`**        | **有効**                 | **✅ v2.1でサポート**              |
+| **call/cc・applyの値渡し** | **手続きなので可能**   | **❌ 特殊形式のため不可**          |
+| **内部define**           | **本体内のレキシカル束縛** | **✅ v2.1でサポート（先頭のみ）** |
+| **ドット位置のunquote**  | **`` `(a . ,x) ``**      | **✅ v2.1でサポート**              |
+| **ベクタ内のunquote**    | **`` `#(1 ,x) ``**       | **✅ v2.1でサポート**              |
+| **ネストした準クオート** | **`` `(a `(b ,,x)) ``**  | **❌ 未サポート**                  |
+| **単一引数除算**         | **`(/ x)` = 逆数**       | **❌（v2.0で明示的にエラー）**     |
+| **角括弧**               | **`[]` = `()`**          | **❌ 未サポート**                  |
 
 **✨ v2.0での改善**:
 - `#t` / `#f` 構文の追加でR5RS/R7RSとの互換性向上
 - 未サポート機能で親切なエラーメッセージを提供
+
+**✨ v2.1での改善**:
+- `call-with-current-continuation` を追加（教科書のコードがそのまま動く）
+- 内部 `define` がグローバルを汚さなくなった
+- 準クオートのドット位置・ベクタ内の `unquote` に対応
+- 特殊形式の構文エラーがフォーム名と該当式つきで報告される
 
 ### 12.3 移植時の注意点
 
@@ -3588,6 +3873,34 @@ true     ; scheme12独自（互換性のため残存）
 (set-cdr! circ circ)
 (equal? circ circ)  ; → TRUE（クラッシュしない）
 ```
+
+#### v2.1での注意点 ✨
+
+**1. 内部 define のスコープが変わった**
+```scheme
+(define (f x) (define y (* x 2)) (+ y 1))
+(f 5)   ; → 11（変わらず）
+y       ; v2.0: 10（グローバルに漏れていた）
+        ; v2.1: unbound global: y（正しい）
+```
+v2.0 の挙動に依存して、関数の外から内部 `define` の名前を参照していた
+コードは動かなくなります。その場合はトップレベルの `define` に移してください。
+
+**2. 余分な引数がエラーになる**
+```scheme
+(if a b c d)     ; v2.0: d を黙って無視 → v2.1: エラー
+(define x 1 2)   ; v2.0: 2 を黙って無視 → v2.1: エラー
+```
+
+**3. 継続は1つの begin にまとめる**
+```scheme
+; 何度も再入する用途（ジェネレータ等）は1フォームにまとめる
+(begin
+  (define k (call/cc (lambda (c) c)))
+  ...)
+```
+トップレベルのフォームはそれぞれ別の VM で評価されるため、別フォームから
+継続を起動するとそのフォームの残りは実行されません。
 
 ---
 
@@ -3689,28 +4002,61 @@ void init_globals() {
 
 ### 13.5 既知の制限事項
 
-#### 循環構造（v2.0で改善）✨
+#### 循環構造（v2.1で完成）✨
 ```scheme
-; v2.0以降は安全
+; cdr方向・car方向のどちらの循環も安全
 (define a (cons 1 2))
 (set-cdr! a a)
-
-; equal?は無限ループしない
 (equal? a a)  ; → TRUE（安全）
+a             ; → (1 . #<circular>)
 
-; to_stringも無限ループしない
-a  ; → (1 . #<circular>)
+(define x (list 1 2))
+(set-car! x x)
+x             ; → (( . #<circular>) 2)   v2.1で対応
+
+; 長いリストでもスタックを溢れさせない
+(define (range n acc) (if (= n 0) acc (range (- n 1) (cons n acc))))
+(equal? (range 200000 '()) (range 200000 '()))  ; → TRUE   v2.1で対応
 ```
 
 **残る制限**:
-- 極めて深いネストは検出できない場合がある
-- パフォーマンスへの若干の影響（通常は無視できる）
+- car 方向に極端に深くネストした構造は、C スタックの深さで制限される
+- `equal?` は照合中のスパンの長さに比例した作業メモリ
+  （`unordered_map`）を確保する。20万要素同士の比較で数秒かかる
 
 #### 継続の制約
 ```scheme
 ; 継続はファーストクラスだが、
 ; C++側のフレームを跨ぐ復帰は未サポート
 ```
+- `call/cc` と `apply` は特殊形式であって値ではない。
+  `(procedure? call/cc)` は `FALSE` で、高階関数に渡せない。
+  ファーストクラス化するには `Op::APP` に分岐を足す必要があり、
+  呼出しのホットパスに手を入れることになる
+- トップレベルのフォームは別々の VM で評価されるため、フォームを跨いで
+  継続を起動するとそのフォームの残りは実行されない
+
+#### 内部 define の制約（v2.1）
+- 本体**先頭**の連続した `define` だけが `letrec` に変換される。
+  式より後ろの `define`、マクロが生成した `define`、本体先頭の
+  `(begin (define ...) ...)` のスプライスは従来どおりグローバルになる
+
+#### マクロの制約
+- マクロ展開はコンパイル時、`define-macro` の実行は実行時なので、
+  同一コンパイル単位（同じ `begin` やライブラリ本体）の中で定義直後に
+  使うことはできない。トップレベルで1フォームずつ評価する分には問題ない
+
+#### メモリ
+- 16文字以上の識別子名（`Symbol::name`、`Instruction::sym`、
+  `Closure::params`）は `GC_MALLOC_UNCOLLECTABLE` から確保され、
+  `gc` 継承クラスのデストラクタが呼ばれないため解放されない
+- `make_gensym` はシンボルをインターンするため、`or`/`cond`/`case`/`do`
+  をコンパイルするたびに `g_symbol_intern` が単調増加する
+
+#### 性能
+- 呼出し1回あたり `Op::ARGS` で引数をリスト化 → `vector_from_list` で
+  ベクタに戻す → フレームをベクタ化、という三重変換をしている。
+  単純なループで約30万呼出し/秒
 
 #### ポータビリティ
 - Boehm GCのヘッダ検出が環境依存
@@ -4084,6 +4430,106 @@ scheme12> (load "rbtree_robustness_test.scm")
 - `rb-delete-min` は今までと同じ引数・返り値のまま、内部の安全性のみ向上
 - `rbtree_stress_test_safe.scm`（既存のGC込みストレステスト）は無修正のまま動作確認済み
 - 新規追加は `rb-contains?`、`rb-delete-min-impl`（内部専用）、`rb-check-order`（内部専用、検証用のモジュールレベル変数 `rb-order-ok` / `rb-order-prev-set` / `rb-order-prev` を伴う）のみ
+
+---
+
+## 16. 最近の改善（v2.1）✨
+
+### 16.1 概要
+
+v2.1 では、**落ちる・止まる不具合**と**エラーも出さずに間違った結果を返す
+不具合**の解消を最優先に、あわせて R5RS 適合性と診断メッセージを改善しました。
+
+各項目は再現を確認したうえで修正し、修正後に既存ファイル12件
+（`test_fixes` / `test_improvements` / `list_test1` / `test_vector_env` /
+`rbtree_robustness_test` / `rbtree_stress_test_safe` / `performance_test` /
+`hashtable_lib` / `mlib7` / `rbtree_lib_improved` / `test-case6` /
+`system_lib`）の出力が修正前とバイト単位で一致することを確認しています。
+
+### 16.2 落ちる・止まる不具合
+
+| 症状 | 原因 | 対応 |
+|---|---|---|
+| 閉じ括弧のないファイルを `--load` すると OOM | `read_list`/`read_vector` が EOF の `nullptr` を検出せず無限ループ | 終端を検出して `unexpected EOF in list` を投げる（§3.2） |
+| car 方向の循環リストの表示で SIGSEGV | `list_to_string_with_visited` が car を `to_string()` で出力し `visited` が毎回リセットされていた | `to_string_with_visited` へ引き回す。あわせて経路をバックトラック（§2.4） |
+| 20万要素同士の `equal?` で SIGSEGV | cdr 方向も再帰していた | cdr の走査をループ化し、car のみ再帰（§2.4） |
+| ポートを閉じ忘れるとディスクリプタ枯渇 | `gc` 継承ではデストラクタが呼ばれない | `gc_cleanup` 継承 ＋ `EMFILE` 時の GC リトライ（§8.1.11） |
+
+```
+; 修正前 → 修正後
+閉じ括弧なし --load : std::bad_alloc     → unexpected EOF in list
+(set-car! x x) の表示: SIGSEGV           → (( . #<circular>) 2)
+20万要素の equal?     : SIGSEGV           → TRUE
+ポート2000個オープン   : cannot open file → done
+```
+
+### 16.3 黙って間違う不具合
+
+**準クオートのドット位置 unquote**（§7.3）
+
+```scheme
+(define k 'name) (define v 42)
+`(,k . ,v)     ; v2.0: (name unquote v)  → v2.1: (name . 42)
+`#(1 ,x)       ; v2.0: #(1 (unquote x))  → v2.1: #(1 7)
+```
+
+**内部 define のグローバル汚染**（§4.3.5）
+
+```scheme
+(define (make-f n) (define (helper x) (* x 2)) (lambda () (helper n)))
+(define (make-g n) (define (helper x) (* x 3)) (lambda () (helper n)))
+(define ff (make-f 5))
+(define gg (make-g 5))
+(list (ff) (gg) (ff))   ; v2.0: (15 15 15)  → v2.1: (10 15 10)
+```
+
+どちらもエラーにならず壊れた値が下流へ流れるため、発見が難しい種類の
+不具合でした。
+
+### 16.4 R5RS 適合性
+
+- `call-with-current-continuation` を追加（`call/cc` の別名）。従来は
+  未定義で、教科書や既存の R5RS コードを貼り付けると `unbound global`
+  で即座に止まっていた（§6.4）
+- `Op::CALLCC` / `Op::TCALLCC` が継続を受け取れるようになった。R5RS では
+  継続も1引数の手続きなので `(call/cc k)` は有効（§6.4）
+- 本体先頭の `define` がレキシカルな束縛になった（§4.3.5）
+- 準クオートのドット位置・ベクタ内の `unquote` に対応（§7.3）
+
+### 16.5 診断メッセージ
+
+特殊形式の構文検査を追加し、構文エラーがフォーム名・期待する形・
+実際に書かれた式つきで報告されるようになりました（§4.3.6）。
+
+```
+(define x)     v2.0: expected pair
+               v2.1: bad syntax in define: variable definition needs
+                     a value expression -- in (define x)
+```
+
+### 16.6 互換性への影響
+
+**ほぼ後方互換** ですが、次の3点は挙動が変わります。
+
+1. **内部 `define` がグローバルに漏れなくなった** — v2.0 の挙動に依存して
+   関数の外から内部 `define` の名前を参照していたコードは動かなくなります
+2. **余分な引数がエラーになった** — `(if a b c d)` や `(define x 1 2)` は
+   v2.0 では黙って無視していました
+3. **`(let ((x)) ...)` のような不正な束縛がエラーになった** — v2.0 では
+   `expected pair` で落ちるか、書き方によっては通っていました
+
+### 16.7 未着手の項目
+
+| 項目 | 内容 |
+|---|---|
+| 性能 | `Op::ARGS` のリスト化を廃して呼出しコストを下げる（現状 約30万呼出し/秒） |
+| マクロの診断 | 同一コンパイル単位内でマクロを使うと `APP target is not callable` になる |
+| `LDCT` | コンパイラが生成しないデッドコード |
+| 識別子名のリーク | 16文字以上の名前が `GC_MALLOC_UNCOLLECTABLE` から確保され解放されない |
+| gensym | シンボルをインターンするため `g_symbol_intern` が単調増加する |
+| first-class 化 | `call/cc` / `apply` を値として渡せるようにする |
+
+詳細は §13.5「既知の制限事項」を参照してください。
 
 ---
 
@@ -4700,9 +5146,27 @@ Bye!
 
 ## まとめ
 
-**scheme12_debug v2.0**は、SECDアーキテクチャに基づく教育的かつ実用的なScheme実装です。
+**scheme12_debug v2.1**は、SECDアーキテクチャに基づく教育的かつ実用的なScheme実装です。
 
-### v2.0の主な改善 ✨
+### v2.1の主な改善 ✨ ← **NEW!**
+
+**堅牢性**（[16章](#16-最近の改善v21)参照）:
+- ✅ **リーダの入力終端検出**: 閉じ括弧のないファイルでの無限ループ／OOMを解消
+- ✅ **car方向の循環検出**: `(set-car! x x)` の表示でのSIGSEGVを解消
+- ✅ **equal?のループ化**: 長いリスト同士の比較でのスタック溢れを解消
+- ✅ **ポートの自動回収**: `gc_cleanup`＋`EMFILE`時のGCリトライでディスクリプタ枯渇を解消
+
+**正しさ**:
+- ✅ **準クオートのドット位置unquote**: `` `(,k . ,v) `` が正しい対を作る
+- ✅ **ベクタ内のunquote**: `` `#(1 ,x) `` に対応
+- ✅ **内部defineのスコープ**: グローバルを汚さないレキシカル束縛に
+
+**R5RS適合性と診断**:
+- ✅ **call-with-current-continuation**: 正式名を追加
+- ✅ **`(call/cc k)`**: 継続を`call/cc`に渡せるように
+- ✅ **特殊形式の構文検査**: フォーム名と該当式つきのエラーメッセージ
+
+### v2.0の主な改善
 
 **コア機能**:
 - ✅ **循環構造の完全対応**: equal?とto_stringで無限ループ回避
