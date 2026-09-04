@@ -1125,6 +1125,19 @@ static ValuePtr expand_cond(ValuePtr rest) {
 
 static ValuePtr qq_transfer(ValuePtr ls) {
     if (is_pair(ls)) {
+        // ドット位置の unquote。`(a . ,x) はリーダで (a unquote x) と読まれるため、
+        // cdr へ降りた先で ls 自身が (unquote x) になる。ここで拾わないと
+        // unquote がただのシンボルとして素通りし、(a unquote x) という
+        // 3要素のリストが黙って出来てしまう（期待は (a . <xの値>)）。
+        // R5RS では `(unquote x) と ,x は等価なので、この置き換えは常に正しい。
+        if (is_symbol(car(ls), "unquote")) {
+            if (!is_pair(cdr(ls))) vm_error("quasiquote: malformed unquote");
+            return car(cdr(ls));
+        }
+        // `(a . ,@x) は R5RS で不正。黙って壊れた結果を返さずに知らせる。
+        if (is_symbol(car(ls), "splice")) {
+            vm_error("quasiquote: unquote-splicing is not allowed in dotted tail position");
+        }
         ValuePtr a = car(ls);
         if (is_pair(a)) {
             if (is_symbol(car(a), "unquote")) {
@@ -1141,6 +1154,13 @@ static ValuePtr qq_transfer(ValuePtr ls) {
         return list_from_vector({make_symbol("cons"), 
                                 list_from_vector({make_symbol("quote"), a}), 
                                 qq_transfer(cdr(ls))});
+    }
+    // ベクタリテラル内の unquote。要素をリストに直して変換し、list->vector で戻す。
+    // これがないと `#(1 ,x) が #(1 (unquote x)) になる。
+    if (is_vector(ls)) {
+        VectorPtr vec = as_vector(ls);
+        return list_from_vector({make_symbol("list->vector"),
+                                 qq_transfer(list_from_vector(vec->elements))});
     }
     return list_from_vector({make_symbol("quote"), ls});
 }
