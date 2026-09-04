@@ -1777,10 +1777,10 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
         return;
     }
 
-    // 原典のテスト機構・トレース切り替え。scheme12 と同じく無視して #t を返す。
-    // （復活させるかは dev_memo.md §9 の保留事項）
-    if (h == "test-start" || h == "test-end" || h == "trace-print" ||
-        h == "macro-print" || h == "compile-print") {
+    // 原典のトレース切り替え。後継（trace-on / compile / disassemble）が
+    // あるので、scheme12 と同じく無視して #t を返す。
+    // `test-start` / `test-end` は 6日目にプリミティブとして復活させた（決定29）。
+    if (h == "trace-print" || h == "macro-print" || h == "compile-print") {
         Instruction i(Op::LDC);
         i.p1 = g_true;
         emit(code, i, pos);
@@ -2976,6 +2976,33 @@ static ValuePtr prim_random_seed(ValuePtr* a, std::size_t n) {
     return g_nil;
 }
 
+// --- 原典のテスト機構（test-start / test-end） -----------------------------
+//
+// 原典 micro_Scheme8.lisp の REPL は、この2つに挟まれた区間で **式を1つ評価する
+// ごとに次の S 式を期待値として読み、照合する**（micro_scheme8_notes.md §6.1）。
+// scheme12 はこれを `LDC #t` にする無視扱いにしたため機構が失われ、
+// test-case6.scm は「裸の A で必ず落ちるファイル」になっていた。
+//
+// 照合そのものはファイルを読み進める側（セクション12 の load_from_path）が行う。
+// ここはスイッチと集計だけを持つ。
+
+static bool g_test_mode  = false;
+static long g_test_total = 0;
+static long g_test_pass  = 0;
+static long g_test_ng    = 0;
+
+static ValuePtr prim_test_start(ValuePtr*, std::size_t) {
+    g_test_mode  = true;
+    g_test_total = g_test_pass = g_test_ng = 0;
+    return g_true;      // 原典は ldc *test-mode-flag*（= T）を積む
+}
+static ValuePtr prim_test_end(ValuePtr*, std::size_t) {
+    g_test_mode = false;
+    std::printf("\n( total: %ld  pass: %ld  NG: %ld )\n",
+                g_test_total, g_test_pass, g_test_ng);
+    return g_nil;       // 原典は ldc *test-mode-flag*（= NIL）を積む
+}
+
 static ValuePtr prim_gc_collect(ValuePtr*, std::size_t) {
     GC_gcollect();
     return g_nil;
@@ -3163,6 +3190,8 @@ static void init_globals() {
         {"gc-collect", prim_gc_collect}, {"gc-heap-size", prim_gc_heap_size},
         {"gc-free-bytes", prim_gc_free_bytes},
 
+        {"test-start", prim_test_start}, {"test-end", prim_test_end},
+
         {"compile", prim_compile_show}, {"disassemble", prim_disassemble},
         {"trace-on", prim_trace_on}, {"trace-off", prim_trace_off},
         {"globals", prim_globals}, {"macros", prim_macros}, {"help", prim_help},
@@ -3203,10 +3232,52 @@ static bool definition_name(ValuePtr expr, GcString& name, bool& is_macro) {
     return false;
 }
 
+// 期待値の照合（原典のテスト機構。プリミティブ側は test-start / test-end）。
+//
+// **期待値は Common Lisp のリーダを通った綴りなので、すべて大文字**
+// （`(quote a)` の期待値が `A`、`true` の期待値が `TRUE`）。scheme13 のリーダは
+// 大小文字を保存するので、値そのものの equal? では一致しない。
+// 転写の意図は「表示がこうなる」なので、**write 表現を大小文字を無視して
+// 比べる**ことにした。これで symbol / TRUE / FALSE / NIL が素直に通る。
+static bool test_matches(ValuePtr actual, ValuePtr expected) {
+    std::string a = to_string(actual);
+    std::string b = to_string(expected);
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) return false;
+    }
+    return true;
+}
+
+// 出力の形は原典に合わせる: 値 + 空白、50桁目まで詰めて " pass" か
+// "  NG  ( expected: ... )"（原典の ~S と ~50T に対応）。
+static void report_test_result(ValuePtr actual, ValuePtr expected) {
+    ++g_test_total;
+    std::string line = to_string(actual) + " ";
+    while (line.size() < 50) line += ' ';
+    if (test_matches(actual, expected)) {
+        ++g_test_pass;
+        line += " pass";
+    } else {
+        ++g_test_ng;
+        line += "  NG  ( expected: " + to_string(expected) + " )";
+    }
+    std::printf("%s\n", line.c_str());
+}
+
 static ValuePtr load_from_path(const std::string& path) {
     std::uint16_t id = source_intern(path, slurp_file(path));
+    GcVec<TopForm> forms = read_all(id);
     ValuePtr last = g_nil;
-    for (const TopForm& f : read_all(id)) last = eval_top(f.expr, f.pos);
+    for (std::size_t i = 0; i < forms.size(); ++i) {
+        last = eval_top(forms[i].expr, forms[i].pos);
+        // テストモード中は、次の S 式が「いま評価した式の期待値」。
+        // (test-start) 自身の評価でモードが立つので、その次の T から照合が始まり、
+        // (test-end) の評価でモードが降りるのでそこで止まる。原典と同じ。
+        if (!g_test_mode || i + 1 >= forms.size()) continue;
+        report_test_result(last, forms[++i].expr);
+    }
     return last;
 }
 
@@ -3525,6 +3596,30 @@ static void selftest_expand() {
     }
 }
 
+// 原典のテスト機構の照合規則（大小文字を無視した write 表現の比較）。
+// 実際の読み進めはゴールデン（test-case6.scm）が端から端まで押さえている。
+static void selftest_test_matching() {
+    auto datum = [](const std::string& src) {
+        std::uint16_t id = source_intern("<selftest>", src);
+        Reader r(id);
+        return r.read_expr();
+    };
+    auto match = [&](const std::string& actual, const std::string& expected) {
+        return test_matches(eval_top(datum(actual)), datum(expected)) ? "pass" : "NG";
+    };
+    // 期待値は CL のリーダ由来で大文字。大小文字を無視して照合する
+    check_eq("test: symbol case",  match("(quote a)", "A"),        "pass");
+    check_eq("test: list case",    match("(cdr '(a b c))", "(B C)"), "pass");
+    check_eq("test: boolean",      match("(eq? 'a 'a)", "TRUE"),   "pass");
+    check_eq("test: nil",          match("(cdr '(a))", "NIL"),     "pass");
+    check_eq("test: dotted",       match("(cons 'a 'b)", "(A . B)"), "pass");
+    check_eq("test: mismatch",     match("(quote a)", "B"),        "NG");
+    // 原典との既知の差（golden/README.md の表）。ここが pass に変わったら
+    // 凍結仕様のどれかが動いている
+    check_eq("test: closure differs",  match("(lambda (x) x)", "(CLOSURE (LD (0 . 0) RTN) NIL)"), "NG");
+    check_eq("test: (begin) differs",  match("(begin)", ":UNDEF"), "NG");
+}
+
 static void selftest_positions() {
     std::uint16_t id = source_intern("t.scm", "(define x\n        (foo bar))\n");
     Reader r(id);
@@ -3763,6 +3858,7 @@ int main(int argc, char** argv) {
             selftest_expand();
             selftest_positions();
             selftest_eval();
+            selftest_test_matching();
             std::printf("\n  %d checks, %d failed\n", g_checks, g_failures);
             return g_failures == 0 ? 0 : 1;
         }
