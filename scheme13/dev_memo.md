@@ -1085,6 +1085,93 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
 - 性能は変わっていない（100万回で 0.12 秒）。`make_frame` の分岐を
   1つにまとめたが、どちらにせよ分岐予測に乗る位置なので差は出ない。
 
+### 2026-09-04（8日目）— R5RS の不足を別ファイルで足す
+
+7日目に「`abs` / `assoc` / `member` / `list-ref` などは scheme12 にも無い」と
+報告したところ、利用者から**別ファイルにして `scheme13/` に置く**よう指示が出た。
+
+41. **`error` プリミティブを足す**（セクション11）。SRFI-23 の
+    `(error message irritant ...)`。
+    - **Scheme で書いたライブラリが §4.2 の形で報告するための唯一の口。**
+      これが無いと lib13.scm は `(car '())` を踏ませるくらいしか手が無く、
+      「`car: expected a pair`」という、呼ばれた側の名前が出ないエラーしか
+      出せない
+    - 見出しは呼ぶ側が決める（`"sqrt: argument out of range"` のように
+      §4.2 の語彙で書く）。irritant が `given:` の詳細行になる
+    - C++ 側の内部ヘルパ `prim_error(who, what)` と名前が衝突するので、
+      関数名は `prim_raise_error` にした。命名規則（`prim_<名前>`）を
+      あえて外している
+
+42. **`scheme13/lib13.scm` を新設し、起動時に `system_lib.scm` の後で読む。**
+    - **入れる基準は「R5RS にあって scheme13 に無いもの」の一本。**
+      `sort` / `reduce` / `string-upcase` のような便利な非標準手続きは
+      入れない。線を引かないと際限が無く、§1.1（機能追加の誘惑に負けない）に
+      反する。**足すときは、この基準ごと利用者と決め直すこと**
+    - 却下案: `system_lib.scm` に直接足す。あれは scheme12 と共有している
+      既存資産で、触るとゴールデン12件すべてに影響する。
+      §1.4 の優先順位1（既存資産を一字も変えずに動かす）に反する
+    - **読む順序に意味がある。** `load_library_dedup` は定義済みの名前を
+      飛ばすので、先に読んだほうが勝つ。`system_lib.scm` を先に読むことで、
+      既存資産の振る舞いを scheme13 が変えないことを保証する
+    - 探索は `system_lib.scm` と同じ仕組み（決定39）を使い回す。
+      環境変数は `SCHEME13_LIB13`。見つからなければ同じく警告する
+    - 凍結仕様に合わせた判断:
+      - 数値塔の述語（`integer?` / `rational?` / `real?` / `complex?`）は
+        すべて `number?` に潰れる。整数は有理数でも実数でも複素数でもあるので
+        嘘ではない。`exact?` は常に真、`inexact?` は常に偽
+      - `sqrt` は**平方根の整数部**を返す。R5RS の「正確でなければ不正確な数を
+        返す」は、不正確な数が無いので採れない
+      - `expt` の負の指数と `sqrt` の負の引数は**エラー**。黙って 0 を
+        返さない
+      - `floor` / `ceiling` / `truncate` / `round` は整数では恒等。
+        名前を受け付けること自体に意味がある（他所のコードがそのまま動く）
+      - `remainder` の符号は**被除数**に一致する（`modulo` は除数）。
+        `(remainder -7 2)` は -1、`(modulo -7 2)` は 1
+      - `string` は文字が長さ1の文字列（§2.2）なので `string-append` そのもの
+
+43. **エラーの位置は「利用者が書いた行」を指す**（`VM::blame_pos`）。
+    lib13.scm を入れた直後、`(sqrt -4)` が **lib13.scm の 107 行目**を
+    指すようになった。**利用者はその行を書いていないので直しようがない。**
+    - `SourceFile` に `is_library` を持たせ、起動時ライブラリに印を付ける
+    - 位置を埋めるとき、実行中の命令がライブラリの中なら、ダンプを内側から
+      外へ辿って**最初に見つかるライブラリ外の呼び出し位置**を選ぶ。
+      全部ライブラリなら諦めて実行中の位置を返す
+    - 末尾呼び出しはダンプを積まないので、`(define (f n) (sqrt n))` の
+      `(f -9)` は `(sqrt n)` ではなく `(f -9)` を指す。**これは正しい**。
+      末尾呼び出しでフレームが消えるのは SECD の設計そのもので、
+      どの Scheme でも同じことが起きる
+
+**この日やったこと**
+
+- セクション11 に `error`（`prim_raise_error`）
+- セクション2 の `SourceFile` に `is_library`、`pos_in_library()`
+- セクション10 に `VM::blame_pos()`
+- セクション12 の起動時読み込みを `library_candidates` /
+  `try_load_library` / `warn_library_missing` に分解し、2ファイルで使い回す
+- **`scheme13/lib13.scm`（181行、34個）** を新設
+- `scheme13/tests/lib13_test.scm`（75項目）を新設。原典のテスト機構を使い、
+  出力全体をゴールデンで押さえる。`run_golden.sh` に scheme13 自身のテストを
+  置く枠（`OWN_TESTS`）を作った
+- `--selftest` に `error` の4項目（146 → **150 checks**）
+
+**分かったこと**
+
+- **R5RS 名の不足は 40件 → 8件になった。** 残る8件はどれも C++ 側の作業が要る:
+
+  | 残り | なぜ Scheme で書けないか |
+  | --- | --- |
+  | `values` | 多値。VM に返り値を複数運ぶ仕組みが要る |
+  | `dynamic-wind` | 継続の出入りにフックが要る |
+  | `current-input-port` / `current-output-port` | stdin/stdout の**ポート値**が存在しない（`display` は引数省略時に stdout へ書くだけ） |
+  | `input-port?` / `output-port?` | ポートの向きを Scheme から見る術が無い |
+  | `peek-char` / `char-ready?` | ポートの先読みが要る |
+
+- **ゴールデン12件は今回も1バイトも変わらなかった。** 既存資産は
+  `system_lib.scm` が先に読まれるので lib13.scm の定義に触れない。
+  §1.4 の優先順位1 が守られていることの実測。
+- 大域名は **156個（scheme12）→ 194個**。差分は 7日目の4個 + `error` +
+  lib13.scm の33個。
+
 ---
 
 ## 7. 現在の状態
@@ -1104,20 +1191,23 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
   | 9 命令セット | ✅ 逆アセンブル込み（**ファイル上は 8 より前**。決定24） |
   | 8 コンパイラ | ✅ |
   | 10 VM | ✅ |
-  | 11 プリミティブ | ✅ **99個**（＋特殊形式19個、＋`system_lib.scm` の38個 = 大域名160個）。**scheme12（156個）との差は実測ゼロ**（測り方は決定40） |
+  | 11 プリミティブ | ✅ **100個**（＋特殊形式19個、＋`system_lib.scm` の38個、＋`lib13.scm` の33個 = **大域名194個**）。**scheme12（156個）との差は実測ゼロ**（測り方は決定40） |
   | 12 起動 | ✅ REPL / `--load` / `--selftest` / `--read` / `--expand` |
+- `scheme13/lib13.scm` — ✅ R5RS の不足33個（決定42）。起動時に
+  `system_lib.scm` の**後**で読む。既存資産は先に読まれるほうが勝つので無傷
 - `scheme13/Makefile` — ✅（`all` / `selftest` / `compare` / `test` / `bench` / `clean`）
-- `scheme13/tests/` — ✅ ゴールデン12件 + 展開の等価性検証 + README
+- `scheme13/tests/` — ✅ ゴールデン13件（うち `lib13_test.scm` は scheme13 自身の
+  75項目テスト）+ 起動時ライブラリ3件 + 展開の等価性検証 + README
 - `scheme13/dev_memo.md` / `micro_scheme8_notes.md` — ✅
 - 開発環境 — SBCL 2.6.0 導入済み（原典を動かして参照できる）
 
 いま走るテスト:
 
 ```sh
-make -C scheme13 selftest     # 146 checks, 0 failed（セクション 3〜11 の回帰）
+make -C scheme13 selftest     # 150 checks, 0 failed（セクション 3〜11 の回帰）
 make -C scheme13 compare      #  15 passed, 0 failed（展開が scheme12 と等価）
-make -C scheme13 test         #  15 passed, 0 failed  ← 受け入れ基準
-                              #  （ゴールデン12件 + 起動時ライブラリ3件）
+make -C scheme13 test         #  16 passed, 0 failed  ← 受け入れ基準
+                              #  （ゴールデン13件 + 起動時ライブラリ3件）
 make -C scheme13 bench        # 100万回で約 0.12 秒（scheme12 は約 3.3 秒）
 ```
 
@@ -1125,8 +1215,9 @@ make -C scheme13 bench        # 100万回で約 0.12 秒（scheme12 は約 3.3 �
 「何が正しいか」を主張する**（132 pass / 13 NG、NG の内訳は
 `tests/golden/README.md`）。ゴールデンはその出力全体をバイト単位で押さえている。
 
-**scheme12 で `run_golden.sh` を回すと 11/12 になる**（`test-case6.scm` の
-ゴールデンだけ scheme13 の出力で採り直したため。決定27）。
+**scheme12 で `run_golden.sh` を回すと落ちる**。`test-case6.scm` のゴールデンを
+scheme13 の出力で採り直してあり（決定27）、`lib13_test.scm` に至っては
+scheme12 に比べる相手が存在しないため。
 
 scheme12（`scheme12_bignum_boost_debug.cpp`）には**まだ触れていない**。
 置き換えの判断は §8 を参照。
@@ -1160,16 +1251,18 @@ scheme12（`scheme12_bignum_boost_debug.cpp`）には**まだ触れていない*
    - マクロ展開のメモ化（原典がやっている。`micro_scheme8_notes.md` §3.6）
    - `LD` の環境たどりを、深さ0の場合に特化する
 
-4. **`abs` / `assoc` / `member` / `list-ref` / `even?` / `max` / `min` /
-   `sort` / `expt` / `sqrt` を足すか、利用者と決める。** これらは
-   **scheme12 にも無い**ので同等性の話ではなく、純粋な機能追加である
-   （決定40）。§1.1 は「機能追加の誘惑に負けないこと」と言っているので、
-   **勝手に足さない。** 足すと決めたなら置き場所は `system_lib.scm`
-   （C++ ではなく Scheme。プリミティブを増やす理由が無い）。
-   ただし `system_lib.scm` は scheme12 と共有している既存資産なので、
-   触るとゴールデン12件すべてに影響する。**別ファイル
-   （`scheme13/lib13.scm` など）に置いて追加で読む**ほうが安全か、
-   これも含めて相談する。
+4. **残り8つの R5RS 名を入れるか、利用者と決める。** 8日目に 40件 → 8件まで
+   縮めたが、残りはどれも C++ 側の作業が要る（一覧は8日目の「分かったこと」）。
+   重さの順に:
+   - `input-port?` / `output-port?` / `current-input-port` /
+     `current-output-port` — **比較的軽い。** stdin/stdout の `Port` 値を
+     グローバルに1つずつ持ち、`display` などの既定値をそれにすればよい
+   - `peek-char` / `char-ready?` — `Port` に1文字の先読みバッファを足す
+   - `values` — 多値。VM が返り値を複数運ぶ必要がある。**重い**
+   - `dynamic-wind` — 継続の出入りにフック。**重い**、かつ §2.7 の
+     「トップレベルのフォームを跨ぐ継続」の扱いと噛み合うか要検討
+
+   **どれも「無くて困った」という報告は来ていない。** 急がないこと。
 
 5. **エラーの回帰をゴールデン側でも見るか。** 7日目に分かったとおり、既存の
    .scm 資産はエラーを踏まないので、ゴールデン12件はエラーの文面を1つも

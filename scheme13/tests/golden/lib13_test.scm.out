@@ -1,0 +1,78 @@
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+5                                                  pass
+5                                                  pass
+0                                                  pass
+99999999999999999999                               pass
+7                                                  pass
+1                                                  pass
+5                                                  pass
+-7                                                 pass
+3                                                  pass
+-3                                                 pass
+-1                                                 pass
+1                                                  pass
+1                                                  pass
+-1                                                 pass
+6                                                  pass
+2                                                  pass
+6                                                  pass
+0                                                  pass
+7                                                  pass
+12                                                 pass
+1                                                  pass
+0                                                  pass
+1024                                               pass
+1                                                  pass
+1                                                  pass
+243                                                pass
+999999999970000000000299999999999                  pass
+0                                                  pass
+1                                                  pass
+1                                                  pass
+4                                                  pass
+4                                                  pass
+4                                                  pass
+5                                                  pass
+99999999999                                        pass
+5                                                  pass
+-5                                                 pass
+5                                                  pass
+-5                                                 pass
+(a b c)                                            pass
+(b c)                                              pass
+NIL                                                pass
+a                                                  pass
+c                                                  pass
+(2 3)                                              pass
+FALSE                                              pass
+((a) (b))                                          pass
+(2 b)                                              pass
+FALSE                                              pass
+((k) 1)                                            pass
+"abc"                                              pass
+""                                                 pass
+"hello"                                            pass
+:undef                                             pass
+"zzz"                                              pass
+:undef                                             pass
+#(7 7 7)                                           pass
+
+( total: 75  pass: 75  NG: 0 )
+NIL

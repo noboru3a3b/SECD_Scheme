@@ -118,6 +118,10 @@ template <class T> using RootVec = std::vector<T, traceable_allocator<T> >;
 struct SourceFile {
     GcString name;  // 表示名（ファイルパス、あるいは "<stdin>" など）
     GcString text;  // 全文。エラー時にキャレット行を描くために保持する
+    // 起動時ライブラリ（system_lib.scm / lib13.scm）か。エラーの位置を
+    // 選ぶときに使う。**利用者はライブラリの中身を書いていない**ので、
+    // ライブラリの行を指しても直しようがない（決定43）。
+    bool is_library = false;
 };
 
 // 添字 0 は「位置なし」を表す番兵。ファイル id は 16bit なので上限 65535。
@@ -128,12 +132,14 @@ static void source_table_init() {
 }
 
 // ソースを登録して id を返す。上限を超えたら 0（位置なし）を返す。
-static std::uint16_t source_intern(const std::string& name, const std::string& text) {
+static std::uint16_t source_intern(const std::string& name, const std::string& text,
+                                   bool is_library = false) {
     source_table_init();
     if (g_sources.size() >= 0xFFFFu) return 0;
-    g_sources.push_back(SourceFile{to_gc(name), to_gc(text)});
+    g_sources.push_back(SourceFile{to_gc(name), to_gc(text), is_library});
     return static_cast<std::uint16_t>(g_sources.size() - 1);
 }
+
 
 struct SourcePos {
     std::uint16_t file = 0;  // g_sources の添字。0 なら位置なし
@@ -157,6 +163,11 @@ static std::string_view source_line(const SourcePos& pos) {
     // CRLF 対策
     if (end > begin && text[end - 1] == '\r') --end;
     return text.substr(begin, end - begin);
+}
+
+// 位置が起動時ライブラリ（system_lib.scm / lib13.scm）の中を指しているか。
+static bool pos_in_library(const SourcePos& pos) {
+    return pos.known() && pos.file < g_sources.size() && g_sources[pos.file].is_library;
 }
 
 static std::string source_name(const SourcePos& pos) {
@@ -2113,6 +2124,27 @@ struct VM {
     }
 
     // callee はスタックから降ろし済み。引数は [argp, argp+n) にある。
+    // 位置の無いエラーに、どこを指させるか（決定43）。
+    //
+    // 素直には「いま実行中の命令」だが、それが起動時ライブラリの中だと
+    // `(sqrt -4)` が lib13.scm の 107 行目を指す。**利用者はその行を
+    // 書いていないので直しようがない。** そこで、実行中の位置が
+    // ライブラリの中なら、ダンプを内側から外へ辿って**最初に見つかる
+    // ライブラリ外の呼び出し位置**を選ぶ。全部ライブラリなら諦めて
+    // 実行中の位置を返す（ライブラリ同士の呼び出しなど）。
+    //
+    // ダンプの pc は「戻り先」なので、呼び出した命令は c->ins[pc-1]。
+    SourcePos blame_pos(const SourcePos& current) const {
+        if (!pos_in_library(current)) return current;
+        for (std::size_t i = dump.size(); i > 0; --i) {
+            const DumpEntry& d = dump[i - 1];
+            if (!d.c || d.pc == 0 || d.pc > d.c->ins.size()) continue;
+            const SourcePos& p = d.c->ins[d.pc - 1].pos;
+            if (p.known() && !pos_in_library(p)) return p;
+        }
+        return current;
+    }
+
     void do_call(ValuePtr callee, std::size_t argp, std::size_t n,
                  const Instruction& ins, bool tail) {
         switch (tag_of(callee)) {
@@ -2308,7 +2340,10 @@ struct VM {
                     return stack.empty() ? g_nil : stack.back();
             }
             } catch (SchemeError& e) {
-                if (!e.pos.known() && ins.pos.known()) throw SchemeError(e.what(), ins.pos);
+                if (!e.pos.known()) {
+                    SourcePos p = blame_pos(ins.pos);
+                    if (p.known()) throw SchemeError(e.what(), p);
+                }
                 throw;
             }
         }
@@ -3069,6 +3104,25 @@ static ValuePtr prim_read_from_stdin(ValuePtr* a, std::size_t n) {
 
 // --- その他 ----------------------------------------------------------------
 
+// (error message irritant ...) — SRFI-23。**Scheme で書いたライブラリが
+// §4.2 の形で報告するための唯一の口。** これが無いと lib13.scm は
+// 「car: expected a pair」のような、呼ばれた側の名前が出ないエラーしか
+// 出せない（8日目の決定41）。
+//
+// 見出しは呼ぶ側が決める（`"sqrt: wrong type of argument"` のように
+// §4.2 の語彙で書くこと）。irritant は `given:` の詳細行になる。
+// 位置は VM が呼び出し命令のものを埋める。
+// 名前は prim_raise_error。上の内部ヘルパ prim_error(who, what) と
+// 紛らわしくならないよう、あえて命名規則（prim_<名前>）を外している。
+static ValuePtr prim_raise_error(ValuePtr* a, std::size_t n) {
+    need_args("error", n, 1, 0);
+    // 第1引数が文字列なら中身をそのまま見出しにする（引用符を付けない）
+    std::string msg = is_string(a[0]) ? to_std(static_cast<Str*>(a[0])->s)
+                                      : to_string(a[0]);
+    for (std::size_t i = 1; i < n; ++i) msg += detail("given", to_string(a[i]));
+    error_here(msg);
+}
+
 static ValuePtr prim_gensym(ValuePtr* a, std::size_t n) {
     if (n >= 1 && is_string(a[0])) return make_gensym(view_of(str_of(a[0], "gensym")));
     return make_gensym("g");
@@ -3349,6 +3403,7 @@ static void init_globals() {
         {"read-line", prim_read_line}, {"read-expr", prim_read_expr},
         {"load", prim_load},
 
+        {"error", prim_raise_error},
         {"gensym", prim_gensym}, {"random", prim_random}, {"random-seed", prim_random_seed},
         {"gc-collect", prim_gc_collect}, {"gc-heap-size", prim_gc_heap_size},
         {"gc-free-bytes", prim_gc_free_bytes},
@@ -3448,7 +3503,7 @@ static ValuePtr load_from_path(const std::string& path) {
 // 起動時のライブラリ読み込み。**既に定義済みの名前は上書きしない**
 // （組み込みをライブラリ側の同名定義で潰さないため。scheme12 と同じ）。
 static ValuePtr load_library_dedup(const std::string& path) {
-    std::uint16_t id = source_intern(path, slurp_file(path));
+    std::uint16_t id = source_intern(path, slurp_file(path), /*is_library=*/true);
     ValuePtr last = g_nil;
     for (const TopForm& f : read_all(id)) {
         ValuePtr e = f.expr;
@@ -3466,7 +3521,7 @@ static ValuePtr load_library_dedup(const std::string& path) {
     return last;
 }
 
-// 起動時ライブラリ（system_lib.scm）を探して読む。
+// 起動時ライブラリを探す候補を、実行ファイルの位置と cwd から組み立てる。
 //
 // **これが見つからないと reverse / map / append など約60個が丸ごと消える。**
 // scheme12 は実行ファイルがリポジトリのルート（system_lib.scm の隣）に
@@ -3476,48 +3531,76 @@ static ValuePtr load_library_dedup(const std::string& path) {
 // 失っていた（7日目に発覚。決定39）。
 //
 // 探索順。先に見つかったものを使う:
-//   1. 環境変数 SCHEME13_LIB（明示指定。ファイルへのパス）
+//   1. 環境変数（明示指定。ファイルへのパス）
 //   2. 実行ファイルの隣
 //   3. 実行ファイルの1つ上（scheme13/scheme13 → リポジトリのルート）
 //   4. カレントディレクトリ
 //   5. カレントディレクトリの1つ上
-//
-// **どれも見つからなければ黙らずに警告する。** 黙って縮退するのが最も困る。
-static void load_startup_libraries(const char* argv0) {
+static RootVec<std::string> library_candidates(const char* argv0, const char* env_var,
+                                               const char* file) {
     RootVec<std::string> candidates;
-
-    if (const char* env = std::getenv("SCHEME13_LIB"); env && *env)
+    if (const char* env = std::getenv(env_var); env && *env)
         candidates.push_back(env);
-
     if (argv0 && *argv0) {
         std::string exe(argv0);
         std::size_t slash = exe.find_last_of('/');
         if (slash != std::string::npos) {
             std::string dir = exe.substr(0, slash + 1);
-            candidates.push_back(dir + "system_lib.scm");
-            candidates.push_back(dir + "../system_lib.scm");
+            candidates.push_back(dir + file);
+            candidates.push_back(dir + "../" + file);
         }
     }
-    candidates.push_back("system_lib.scm");
-    candidates.push_back("../system_lib.scm");
+    candidates.push_back(file);
+    candidates.push_back(std::string("../") + file);
+    return candidates;
+}
 
+// 候補を順に試す。読めたら true。
+static bool try_load_library(const RootVec<std::string>& candidates) {
     for (const std::string& path : candidates) {
         try {
             load_library_dedup(path);
-            return;
+            return true;
         } catch (const std::exception&) {
             // 次の候補へ
         }
     }
+    return false;
+}
 
-    std::fprintf(stderr,
-                 "scheme13: warning: system_lib.scm not found; the standard library "
-                 "(reverse, map, append, ...) is unavailable.\n"
-                 "  looked in:\n");
+static void warn_library_missing(const char* file, const char* env_var,
+                                 const char* what,
+                                 const RootVec<std::string>& candidates) {
+    std::fprintf(stderr, "scheme13: warning: %s not found; %s\n  looked in:\n",
+                 file, what);
     for (const std::string& path : candidates)
         std::fprintf(stderr, "    %s\n", path.c_str());
-    std::fprintf(stderr, "  set SCHEME13_LIB to its path, or run from the "
-                         "directory that holds it.\n");
+    std::fprintf(stderr, "  set %s to its path, or run from the directory "
+                         "that holds it.\n", env_var);
+}
+
+// 起動時に読むライブラリは2つ。**順序に意味がある。**
+//
+//   system_lib.scm  scheme12 と共有している既存資産。触らない
+//   lib13.scm       scheme13 が足す R5RS 手続き（決定42）。scheme13/ にある
+//
+// lib13.scm を**後**に読むのは、system_lib.scm が定義している名前を
+// 上書きしないため。load_library_dedup は既に定義済みの名前を飛ばすので、
+// 先に読んだほうが勝つ。既存資産の振る舞いを scheme13 が変えてはならない。
+//
+// **どちらも、見つからなければ黙らずに警告する。** 黙って縮退するのが最も困る。
+static void load_startup_libraries(const char* argv0) {
+    RootVec<std::string> sys = library_candidates(argv0, "SCHEME13_LIB", "system_lib.scm");
+    if (!try_load_library(sys))
+        warn_library_missing("system_lib.scm", "SCHEME13_LIB",
+                             "the shared library (reverse, map, append, ...) "
+                             "is unavailable.", sys);
+
+    RootVec<std::string> own = library_candidates(argv0, "SCHEME13_LIB13", "lib13.scm");
+    if (!try_load_library(own))
+        warn_library_missing("lib13.scm", "SCHEME13_LIB13",
+                             "the R5RS additions (abs, assoc, member, list-ref, ...) "
+                             "are unavailable.", own);
 }
 
 // --- 自己テスト（凍結仕様との突き合わせ） ----------------------------------
@@ -3935,6 +4018,20 @@ static void selftest_errors() {
     check_eq("call a non-procedure",
              eval_error_body("(5 6)"),
              "attempt to call a non-procedure\n  expected: a procedure\n  given: 5");
+
+    // Scheme 側から投げる error（決定41）。見出しは呼ぶ側が決め、
+    // irritant が given: の詳細行になる
+    check_eq("error with one irritant",
+             eval_error_body("(error \"sqrt: argument out of range\" -4)"),
+             "sqrt: argument out of range\n  given: -4");
+    check_eq("error with several irritants",
+             eval_error_body("(error \"f: wrong type of argument\" 1 \"two\")"),
+             "f: wrong type of argument\n  given: 1\n  given: \"two\"");
+    check_eq("error with no irritant",
+             eval_error_body("(error \"plain message\")"), "plain message");
+    // 第1引数が文字列でなければ write 表現をそのまま見出しにする
+    check_eq("error with a non-string message",
+             eval_error_body("(error 'oops)"), "oops");
 
     // §2.3 で凍結した文面。中身は変えない
     check_eq("single-argument division",

@@ -38,21 +38,32 @@ fail=0
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
-for f in $FILES; do
+# scheme13 が自分で持つテスト。上の FILES と違い、これは scheme12 の出力では
+# なく scheme13 の出力をゴールデンにしてある（scheme12 には lib13.scm が
+# 無いので比べる相手が存在しない）。**./scheme12_debug を渡すと落ちる。**
+OWN_TESTS="scheme13/tests/lib13_test.scm"
+
+run_one() {
+    f=$1
+    base=$(basename "$f")
     set +e
     timeout 300 "$INTERP" --load "$f" > "$tmp" 2>&1
     got_exit=$?
     set -e
-    want_exit=$(cat "$GOLDEN/$f.exit")
+    want_exit=$(cat "$GOLDEN/$base.exit")
 
-    if diff -q "$GOLDEN/$f.out" "$tmp" > /dev/null 2>&1 && [ "$got_exit" = "$want_exit" ]; then
+    if diff -q "$GOLDEN/$base.out" "$tmp" > /dev/null 2>&1 && [ "$got_exit" = "$want_exit" ]; then
         printf '  PASS  %s\n' "$f"
         pass=$((pass + 1))
     else
         printf '  FAIL  %s (exit: want %s, got %s)\n' "$f" "$want_exit" "$got_exit"
-        diff "$GOLDEN/$f.out" "$tmp" | head -20 | sed 's/^/        /'
+        diff "$GOLDEN/$base.out" "$tmp" | head -20 | sed 's/^/        /'
         fail=$((fail + 1))
     fi
+}
+
+for f in $FILES $OWN_TESTS; do
+    run_one "$f"
 done
 
 # --- 起動時ライブラリの探索（決定39）------------------------------------
