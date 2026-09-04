@@ -1,1 +1,15 @@
 .claude/
+
+# ビルド成果物
+# ルート直下のみを対象にする（先頭の / でアンカー）。
+# gc-8.2.12/ 配下の .dll / .o は同梱ソースの一部として追跡しているため、
+# *.dll のような非アンカーのパターンは使わない。
+/scheme12_debug
+/scheme12_debug.exe
+/*.dll
+
+# クラッシュダンプ
+/core.*
+
+# テスト実行時に生成される一時ファイル（test_improvements.scm）
+/test-eof-temp.txt
