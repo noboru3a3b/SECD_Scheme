@@ -1612,8 +1612,10 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail) 
         return;
     }
 
-    if (is_symbol(head, "call/cc")) {
-        check_arity("call/cc", rest, 1, 1);
+    // call-with-current-continuation は R5RS の正式名。call/cc と同じに扱う。
+    if (is_symbol(head, "call/cc") ||
+        is_symbol(head, "call-with-current-continuation")) {
+        check_arity(as_symbol_name(head), rest, 1, 1);
         comp(car(rest), env, code, false);
         // 末尾位置なら TAPP と同様にダンプを積まない（TCO を効かせる）
         emit(code, make_ins(tail ? Op::TCALLCC : Op::CALLCC));
@@ -1968,8 +1970,24 @@ struct VM {
                         break;
                     }
                     
+                    // R5RS では継続も1引数の手続きなので (call/cc k) は有効で、
+                    // 「いまの継続を引数にして k へ脱出する」ことを意味する。
+                    // Op::APP 側と同じ扱いにする。継続の起動は機械の状態を
+                    // まるごと差し替えるので、ダンプは積まずにここで抜ける。
+                    if (std::holds_alternative<ContPtr>(proc->data)) {
+                        ContPtr target = std::get<ContPtr>(proc->data);
+                        s = target->s;
+                        s.push_back(k);
+                        e = target->e;
+                        c = target->c;
+                        pc = target->pc;
+                        d = target->d;
+                        break;
+                    }
+                    
                     if (!std::holds_alternative<ClosurePtr>(proc->data)) 
-                        vm_error("CALLCC target is not callable");
+                        vm_error("call/cc expects a procedure of one argument, got: "
+                                 + to_string(proc));
                     
                     ClosurePtr clo = std::get<ClosurePtr>(proc->data);
                     ValueVec args = vector_from_list(lvar);
@@ -3475,6 +3493,8 @@ static void init_globals() {
     g_globals["define-macro"] = make_special_form("define-macro");
     g_globals["set!"] = make_special_form("set!");
     g_globals["call/cc"] = make_special_form("call/cc");
+    g_globals["call-with-current-continuation"] =
+        make_special_form("call-with-current-continuation");
     g_globals["apply"] = make_special_form("apply");
     g_globals["begin"] = make_special_form("begin");
     g_globals["let"] = make_special_form("let");
