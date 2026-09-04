@@ -1,1 +1,3 @@
-Fatal error: scheme12 VM error: unbound global: A
+Fatal error: test-case6.scm:7:1: unbound global: A
+    A
+    ^

@@ -2,11 +2,15 @@
 # 既存 .scm 資産の互換性回帰テスト。
 #
 #   usage: scheme13/tests/run_golden.sh [処理系のパス]
-#          （既定は ./scheme13/scheme13。./scheme12_debug を渡せば自己確認になる）
+#          （既定は ./scheme13/scheme13）
 #
 # ゴールデンは scheme12（main の 88db98b 時点）の出力。scheme13 はこれと
 # バイト単位で一致しなければならない。これが「既存 .scm を無修正で動かす」
 # の唯一の判定基準。
+#
+# 例外が1件ある: test-case6.scm のゴールデンだけは scheme13 の出力で
+# 採り直してある（出力が処理系自身のエラー文言だから。理由は golden/README.md）。
+# そのため **./scheme12_debug を渡すと 11/12 になる**。これは正常。
 #
 # 注意: 処理系は起動時に cwd から system_lib.scm を読むため、必ず
 # リポジトリのルートで実行すること（このスクリプトが自分で移動する）。
