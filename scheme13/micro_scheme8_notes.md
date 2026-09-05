@@ -136,6 +136,18 @@ scheme12 はこれを専用命令 `CALLCC` / `TCALLCC` に置き換えたが、
 展開されない**（実質的なメモ化）。scheme12 は毎回展開し直す。
 性能上のアイデアとして記憶しておく価値がある。
 
+`*expr-save*` はこの仕組みの片割れである（16日目に読み直して判明）。
+展開結果が**コンサでないとき**（アトムに展開されたとき）は `expr` を
+その場で書き換えられないので、`comp-body` / `complis` が控えておいた
+「その式を保持しているセル」の `car` を差し替える。
+
+```lisp
+(t (setf (car *expr-save*) new-expr)     ; expr がアトムに化けたとき
+   (comp new-expr env code nil))
+```
+
+**エラー報告のための仕組みではない。**
+
 ---
 
 ## 4. 意味論（実測で確認）
@@ -232,19 +244,62 @@ NG 13件はすべて scheme12 が原典から意図的に変えた点の帰結
 
 ### 6.2 その他
 
-| 失われたもの | 内容 |
-| --- | --- |
-| `code` 特殊形式 | `(code <命令列>)` で命令列を直接埋め込める |
-| `macroexpand-1` / `macroexpand` | マクロ展開をScheme側から呼べるプリミティブ |
-| マクロ展開のメモ化 | §3.6。破壊的置き換えによる実質メモ化 |
-| 有理数 | `(/ 5)` → `1/5` |
-| `print` プリミティブ | `-------------------> ~S` 形式のデバッグ出力 |
-| `system` プリミティブ | 外部コマンド実行 |
-| `*expr-save*` | エラー時に「どの式か」を保持する仕組み（未完成に見える） |
+**この表は16日目に総ざらいして取り直した。** 2日目に書いた版は
+`quit` が抜けており、そのせいで15日目まで `(exit)` で終われなかった
+（`dev_memo.md` 決定64）。取り方は**原典の側から名前を抜いて
+scheme13 の `(globals)` と `comm` で突き合わせる**（§8 にコマンド）。
+文書を読み直す方式では「書かれていないもの」に気づけない。
 
-`trace-print` / `compile-print` / `macro-print` のスイッチは、scheme12 では
-`trace-on` / `trace-off` / `compile` / `disassemble` というプリミティブに
-置き換わっており、こちらは**機能的に後継がある**（むしろ強化された）。
+| 失われたもの | 内容 | scheme13 の状態 |
+| --- | --- | --- |
+| `quit` | 自分自身に束縛された**変数**。REPL が評価結果を見て抜ける | **15日目に復活**（手続き `exit` / `quit` として。決定64〜69） |
+| `macroexpand-1` / `macroexpand` | マクロ展開を Scheme 側から呼べるプリミティブ | **7日目に復活** |
+| マクロ展開のメモ化 | §3.6。破壊的置き換えによる実質メモ化 | 無い（毎回展開する） |
+| `print` プリミティブ | `-------------------> ~S` を出して NIL を返すデバッグ出力 | 無い |
+| `system` プリミティブ | 外部コマンド実行。`(system prog arg1 (list ...))` | 無い |
+| `code` 特殊形式 | 命令列を直接埋め込む。**囲みのコードは丸ごと捨てられる**（下記） | 無い |
+| `macro-print` スイッチ | コンパイラが行う展開を**入れ子まで**順に見せる（下記） | 後継が届いていない |
+| `compile-print` スイッチ | REPL の入力ごとに `Compile => <命令列>` と `Value => ` を自動で出す | `(compile expr)` が後継（**都度指定**） |
+| `trace-print` スイッチ | VM のステップ表示を切り替える | `trace-on` / `trace-off` が後継（**機能的に埋まっている**） |
+| 有理数 | `(/ 5)` → `1/5` | 無い（`dev_memo.md` §2.3 で凍結済み。入れない） |
+
+`*expr-save*` は「失われたもの」ではなく、メモ化の片割れである（§3.6）。
+
+#### `code` は「埋め込む」ではなく「置き換える」
+
+`comp` が `(cadr expr)` をそのまま返すので、**囲みのコードは捨てられる**。
+
+```
+> (display (code (ldc 99 stop)))
+99                     ; display は走らない。REPL の値が 99 になる
+> (display (code (ldc 99)))
+ERROR: unknown opcode  ; 99 が次の命令として読まれる
+```
+
+命令セットを試すための生フックであって、利用者向けの機能ではない。
+
+#### `macro-print` は `macroexpand` では代われない
+
+`macroexpand` は**最外のフォームしか展開しない**（原典・scheme13 とも）。
+
+```
+scheme13> (macroexpand '(inc (inc 5)))
+(+ (inc 5) 1)          ; 内側の (inc 5) は残る
+```
+
+原典の `macro-print` は**コンパイラが実際に行う展開**を入れ子まで順に見せ、
+さらに完全展開後のソースも出す（メモ化の副産物。§3.6）。
+
+```
+> (macro-print)
+> (display (inc (inc 5)))
+Macro: (INC (INC 5))      Expand: (+ (INC 5) 1)
+Macro: (INC 5)            Expand: (+ 5 1)
+Expanded: (DISPLAY (+ (+ 5 1) 1))
+```
+
+scheme13 の `--expand` も代わりにならない。**評価しないので
+`define-macro` が効いておらず**、利用者のマクロを知らないまま素通りする。
 
 ---
 
@@ -278,3 +333,20 @@ sudo apt-get install -y sbcl
 echo quit | sbcl --script micro_Scheme8.lisp          # 145 pass / 0 NG を確認
 sbcl --script micro_Scheme8.lisp < probe.txt          # 意味論の実測（§4）
 ```
+
+**原典との差を洗う**（§6.2 はこれで取った。`dev_memo.md` 決定71）:
+
+```sh
+# 大域名（:gvar として登録されるもの）
+grep -o "(setf (get '[^ ]* :gvar)" micro_Scheme8.lisp   | sed "s/.*(get '//; s/ :gvar)//" | sort -u > /tmp/orig_gvar
+printf '(globals)\n' | ./scheme13/scheme13 | grep ' : ' | sed 's/ : .*//' | sort -u > /tmp/g13
+comm -23 /tmp/orig_gvar /tmp/g13        # 原典にあって scheme13 に無いもの
+
+# 特殊形式（comp が名前で分岐しているもの）
+sed -n '/^(defun comp /,/^(defun /p' micro_Scheme8.lisp \
+  | grep -o "(eq (car expr) '[a-z!/-]*" | sed "s/.*'//" | sort -u > /tmp/orig_sf
+comm -23 /tmp/orig_sf /tmp/g13
+```
+
+**原典は `(quit)` では終われない。** `quit` は変数なので裸で `quit` と打つ。
+`(quit)` は `The value QUIT is not of type LIST` で落ちる。
