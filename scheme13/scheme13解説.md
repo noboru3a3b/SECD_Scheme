@@ -1,7 +1,7 @@
-# scheme13 解説文書（v1.2）
+# scheme13 解説文書（v1.3）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
-対象は `scheme13/scheme13.cpp`（単一ファイル、4,726 行）と
+対象は `scheme13/scheme13.cpp`（単一ファイル、4,775 行）と
 `scheme13/lib13.scm`（221 行）。
 
 `scheme12_debug`（`scheme12_bignum_boost_debug.cpp`）を、一貫した設計思想の
@@ -30,6 +30,8 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
 出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
 
+> **v1.3 で追ったもの**: `macro-print`（第11.4節）、原典との差の総ざらい（第13章）。
+>
 > **v1.2 で追ったもの**: `exit` / `quit`（第10.11節）、テストの件数（第12.2節）。
 >
 > **v1.1 で追ったもの**: ポートと標準ポート（第10.9節）、多値と `dynamic-wind`
@@ -1163,15 +1165,15 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | 層 | 実体 | 個数 |
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
-| プリミティブ | C++ の関数ポインタ | 112 |
+| プリミティブ | C++ の関数ポインタ | 113 |
 | ライブラリ | Scheme で書かれた定義 | 70（`system_lib.scm` 33 + `lib13.scm` 37） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **210 個**の大域名が起動時に定義される。数え方:
+合計 **211 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 210
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 112
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 211
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 113
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
@@ -1195,7 +1197,7 @@ let  let*  letrec  and  or  cond  case  do  quasiquote
 **値としては特殊形式オブジェクト**として大域に束縛されている。
 `(procedure? call/cc)` が `FALSE` なのはこのため。
 
-### 10.3 プリミティブ（112）
+### 10.3 プリミティブ（113）
 
 ```cpp
 using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
@@ -1216,7 +1218,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | 多値・動的拡張 | `values` `%values->list` `%wind-push` `%wind-pop` `%wind-top-after` |
 | その他 | `error` `%exit` `gensym` `random` `random-seed` `gc-collect` `gc-heap-size` `gc-free-bytes` |
 | テスト機構 | `test-start` `test-end` |
-| デバッグ | `compile` `disassemble` `trace-on` `trace-off` `globals` `macros` `help` `macroexpand-1` `macroexpand` |
+| デバッグ | `compile` `disassemble` `trace-on` `trace-off` `macro-print` `globals` `macros` `help` `macroexpand-1` `macroexpand` |
 
 `write_newline` は scheme12 が残していた旧 API 名で、互換のために
 `newline` の別名として登録してある。
@@ -1604,6 +1606,7 @@ Expansion:
 Tracing:
   (trace-on)            Enable VM step-by-step trace
   (trace-off)           Disable trace
+  (macro-print)         Toggle tracing of macro/special-form expansion
 
 Leaving:
   (exit)                Quit; (exit n) sets the exit status
@@ -1643,7 +1646,91 @@ Environment: (empty)
 Dump: 0 frame(s)
 ```
 
-### 11.4 GC の観察
+### 11.4 マクロ展開の実況（`macro-print`）
+
+**`macroexpand` では代われない。** あれは**最外のフォームを1段書き換えるだけ**で、
+入れ子の展開は見えない。
+
+```scheme
+(macroexpand '(inc (inc 5)))   ; => (+ (inc 5) 1)   内側の (inc 5) は残る
+```
+
+`--expand` も代わりにならない。**評価しないので `define-macro` が効いておらず**、
+利用者のマクロを知らないまま素通りする（第11.1節）。
+
+`(macro-print)` が見せるのは**コンパイラが実際に行った書き換え**である。
+切り替え式で、切り替えた後の値を返す。
+
+```
+scheme13> (macro-print)
+Macro expansion trace: ON
+TRUE
+scheme13> (display (inc (inc 5)))
+
+==== Expand (macro) <stdin:2>:1:10 ====
+from: (inc (inc 5))
+  to: (+ (inc 5) 1)
+
+==== Expand (macro) <stdin:2>:1:15 ====
+from: (inc 5)
+  to: (+ 5 1)
+7
+```
+
+`comp()` が書き換えを行う**2箇所の両方**から呼んでいる。
+
+| 種別 | 出どころ | 例 |
+| --- | --- | --- |
+| `(macro)` | `macro_expand_1_expr` | `define-macro` で定義された利用者のマクロ |
+| `(special form)` | `expand_form_1` | `let` / `let*` / `letrec` / `and` / `or` / `cond` / `case` / `do` / `quasiquote`（第7.2節） |
+
+原典 `micro_Scheme8.lisp` では `let` や `cond` も mlib7.scm のマクロだったので、
+**両方見せて原典の `macro-print` と同じ範囲**になる。実際に混ざるとこう出る。
+
+`t.scm`:
+
+```scheme
+(define-macro twice (lambda (x) (list '+ x x)))
+(macro-print)
+(display (let ((a (twice 3))) (cond ((> a 5) 'big) (else 'small))))
+(newline)
+```
+
+```
+$ scheme13 --load t.scm
+Macro expansion trace: ON
+
+==== Expand (special form) t.scm:3:10 ====
+from: (let ((a (twice 3))) (cond ((> a 5) (quote big)) (else (quote small))))
+  to: ((lambda (a) (cond ((> a 5) (quote big)) (else (quote small)))) (twice 3))
+
+==== Expand (macro) t.scm:3:19 ====
+from: (twice 3)
+  to: (+ 3 3)
+
+==== Expand (special form) t.scm:3:31 ====
+from: (cond ((> a 5) (quote big)) (else (quote small)))
+  to: (if (> a 5) (quote big) (quote small))
+big
+NIL
+```
+
+**出る順序はコンパイルの順序である。** `let` が先に `lambda` へ書き換わり、
+その引数 `(twice 3)` が展開され、最後に本体の `cond` が書き換わる。
+
+**位置が出るのは scheme13 の追加分。** 原典は位置を持たないので出せない
+（`dev_memo.md` 決定78）。見出しの `ファイル:行:桁` はエラーの見出しと
+同じ `pos_label()` で作っている（第3.1節）。
+
+#### 原典との差
+
+| | 原典 | scheme13 |
+| --- | --- | --- |
+| 名前・切り替え・返り値 | `(macro-print)` で切り替え、切り替え後の値を返す | **同じ**（`test-start` / `test-end` と同じ判断。第12.3節） |
+| 各展開の表示 | `Macro:` / `Expand:` の対 | `from:` / `to:` の対 ＋ **位置** |
+| 完全展開後のソース | `Expanded:` として出る | **出さない**。原典のあれは破壊的メモ化の副産物で、scheme13 はメモ化しない |
+
+### 11.5 GC の観察
 
 ```scheme
 (gc-heap-size)    ; ヒープの大きさ
@@ -1660,7 +1747,7 @@ Dump: 0 frame(s)
 ```sh
 make -C scheme13 selftest   # 150 checks — 凍結仕様との突き合わせ（C++ 単体）
 make -C scheme13 compare    #  15 passed — 構文展開が scheme12 と等価か
-make -C scheme13 test       #  23 passed — 既存 .scm 資産との互換性（受け入れ基準）
+make -C scheme13 test       #  24 passed — 既存 .scm 資産との互換性（受け入れ基準）
 make -C scheme13 bench      # 呼び出し性能
 ```
 
@@ -1681,7 +1768,7 @@ make -C scheme13 bench      # 呼び出し性能
 | `selftest_macroexpand` | 展開の観察 |
 | `selftest_test_matching` | テスト機構の照合規則 |
 
-### 12.2 ゴールデン（15件）+ 起動時ライブラリ（3件）+ 終了コード（5件）
+### 12.2 ゴールデン（16件）+ 起動時ライブラリ（3件）+ 終了コード（5件）
 
 既存 `.scm` 資産を走らせ、**出力全体をバイト単位で**ゴールデンと比べる。
 これが「既存 `.scm` を無修正で動かす」の唯一の判定基準である。
@@ -1694,8 +1781,9 @@ make -C scheme13 bench      # 呼び出し性能
 | `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト。scheme12 に比べる相手が無い |
 | `scheme13/tests/port_test.scm` | 同上（ポート。第10.9節） |
 | `scheme13/tests/exit_test.scm` | 同上（`exit`。第10.11節） |
+| `scheme13/tests/macro_print_test.scm` | 同上（`macro-print`。第11.4節） |
 
-加えて2種類の回帰が入っている（合計 23 件）。
+加えて2種類の回帰が入っている（合計 24 件）。
 
 - **cwd を変えて起動する回帰が3件。** ゴールデンは全部リポジトリのルートから
   走るので、これが無いとライブラリ探索の壊れ方に気づけない（第10.7節）
@@ -1806,7 +1894,7 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 ### 13.3 上位互換であること
 
-scheme13 は **210 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **211 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
 差分の 50 個: `lib13.scm` の 35 個 + `error` + `macroexpand-1` +
@@ -1828,14 +1916,39 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ### 13.5 原典 micro_Scheme8.lisp との差異
 
+**この表は16日目に総ざらいして取り直した。** 取り方は
+`micro_scheme8_notes.md` §8 にコマンドがある。**原典の側から名前を抜いて
+`(globals)` と `comm` で突き合わせる**（大域名46個・特殊形式14個）。
+文書を読み直す方式では「書かれていないもの」に気づけない
+（`dev_memo.md` 決定71）。
+
+振る舞いの差:
+
 | 項目 | 原典 | scheme13 |
 | --- | --- | --- |
 | クロージャの表示 | `(CLOSURE <命令列> <環境>)` | `#<closure:(x)>` |
 | `(begin)` `(if #f 10)` | `:UNDEF` | `NIL` |
 | シンボルの大小文字 | CL のリーダが大文字化 | **保存する** |
-| `macroexpand` | あり | あり（scheme13 で復活） |
-| `code` 特殊形式 | あり | **入れない**（使い道がない） |
+| マクロ展開 | 破壊的にメモ化される（同じ箇所は二度展開されない） | 毎回展開する |
 | 有理数 | あり | **入れない**（§2.2 の「整数のみ」を壊す） |
+| `quit` | 自分自身に束縛された**変数**。裸で `quit` と打つ。`(quit)` は落ちる | **手続き**。`(quit)` / `(exit)`（第10.11節） |
+
+原典にあった名前の行方:
+
+| 原典の名前 | scheme13 |
+| --- | --- |
+| `macroexpand` / `macroexpand-1` | **復活**（7日目） |
+| `test-start` / `test-end` | **復活**（6日目。第12.3節） |
+| `quit` | **復活**（15日目。`exit` の別名として。第10.11節） |
+| `macro-print` | **復活**（17日目。第11.4節） |
+| `trace-print` | `trace-on` / `trace-off` が埋めている。名前は無視して `#t` を返す |
+| `compile-print` | `(compile expr)` と重複が大きい。入れない。名前は無視して `#t` を返す |
+| `code` 特殊形式 | **入れない。**「埋め込む」ではなく**囲みのコードを丸ごと捨てる**生フックで、利用者向けの機能ではない |
+| `print` | 無い。`-------------------> ~S` を出して NIL を返すデバッグ出力 |
+| `system` | 無い。外部コマンド実行 |
+
+`print` と `system` を入れるかは利用者と決める話である
+（`dev_memo.md` §8）。
 
 ---
 
@@ -1872,7 +1985,8 @@ scheme12 が落としていた**ので戻した、という互換性の話であ
 - **`syntax-rules`。** `define-macro` のみ
 - **準クオートのネスト。** `` `(a `(b ,,x)) ``
 - **角括弧 `[` `]`。** 区切り文字ではない
-- **`code` 特殊形式。** 原典にはあるが使い道がない
+- **`code` 特殊形式。** 原典にはあるが、囲みのコードを捨てる生フックで
+  利用者向けの機能ではない（第13.5節）
 - **`sort` / `reduce` などの非標準手続き。** `lib13.scm` の基準は
   「R5RS にあって無いもの」の一本（第10.6節）
 
@@ -2361,7 +2475,7 @@ scheme13 は scheme12 と**同じ振る舞いを、選び直した設計で**実
 Scheme 処理系である。
 
 - 既存 `.scm` 資産はゴールデンで**バイト単位で一致**する（受け入れ基準）
-- 大域名は scheme12 の 156 個をすべて含み、**54 個多い上位互換**（210 個）
+- 大域名は scheme12 の 156 個をすべて含み、**55 個多い上位互換**（211 個）
 - **R5RS の不足はゼロ。** 8日目に数え上げた 40 件を、`lib13.scm`（8日目）、
   ポート（10日目）、多値と `dynamic-wind`（13日目）で埋めた
 - 呼び出し性能は**約 27 倍**。実ワークロード（赤黒木）は 12日目に

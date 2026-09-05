@@ -183,6 +183,13 @@ static std::string source_name(const SourcePos& pos) {
     return to_std(g_sources[pos.file].name);
 }
 
+// 「ファイル名:行:桁」。エラーの見出し（format_error）と、マクロ展開の実況
+// （セクション8 の macro_print_step）が同じ書き方をするための1箇所。
+static std::string pos_label(const SourcePos& pos) {
+    return source_name(pos) + ":" + std::to_string(pos.line) + ":" +
+           std::to_string(pos.col);
+}
+
 // 処理系が投げる例外はこれと SchemeExit の2つだけ。
 // 位置は任意（known() が false なら位置なし）。
 struct SchemeError : std::runtime_error {
@@ -253,8 +260,8 @@ static std::string format_error(const SchemeError& e) {
     if (!e.pos.known()) return e.what();
 
     std::string out;
-    out += source_name(e.pos);
-    out += ":" + std::to_string(e.pos.line) + ":" + std::to_string(e.pos.col) + ": ";
+    out += pos_label(e.pos);
+    out += ": ";
     out += e.what();
 
     std::string_view line = source_line(e.pos);
@@ -1834,6 +1841,29 @@ static void emit(CodePtr code, Instruction ins, const SourcePos& pos) {
     code->ins.push_back(ins);
 }
 
+// --- マクロ展開の実況（原典の macro-print の後継。17日目の決定76〜78）------
+//
+// **`macroexpand` では代われない。** あれは最外のフォームを1段書き換えるだけで、
+// 入れ子の展開は見えない（16日目の決定73）。`--expand` も代わりにならない。
+// 評価しないので `define-macro` が効いておらず、利用者のマクロを知らない。
+//
+// ここが見せるのは**コンパイラが実際に行った書き換え**である。だから
+// `comp()` が書き換えを行う2箇所の、両方から呼ぶ:
+//   - `expand_form_1`（let / cond / quasiquote など、組み込みの特殊形式）
+//   - `macro_expand_1_expr`（define-macro で定義された利用者のマクロ）
+// 原典では前者も mlib7.scm のマクロだったので、両方見せて原典と同じ範囲になる。
+
+static bool g_macro_print = false;
+
+static void macro_print_step(const char* kind, ValuePtr from, ValuePtr to) {
+    SourcePos pos = nearest_pos(from);
+    std::string head = std::string("\n==== Expand (") + kind + ")";
+    if (pos.known()) head += " " + pos_label(pos);
+    std::printf("%s ====\n", head.c_str());
+    std::printf("from: %s\n", to_string(from).c_str());
+    std::printf("  to: %s\n", to_string(to).c_str());
+}
+
 // `inherited` は「自分では位置を持てない部分式」に使う囲みフォームの位置。
 // シンボルはインターンされ fixnum は即値なので位置を持てない。これが無いと
 // いちばん多い実行時エラー（unbound global）に位置が付かない。
@@ -1951,10 +1981,14 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
         return;
     }
 
-    // 原典のトレース切り替え。後継（trace-on / compile / disassemble）が
-    // あるので、scheme12 と同じく無視して #t を返す。
-    // `test-start` / `test-end` は 6日目にプリミティブとして復活させた（決定29）。
-    if (h == "trace-print" || h == "macro-print" || h == "compile-print") {
+    // 原典のトレース切り替えのうち、**後継が本当にあるものだけ**を無視して
+    // #t を返す（scheme12 と同じ扱い）。16日目に実測して仕分けた（決定72）:
+    //   trace-print   → trace-on / trace-off が埋めている
+    //   compile-print → (compile expr) と重複が大きい。入れない
+    // `macro-print` はここから外した。**後継が届いていなかった**ので
+    // プリミティブとして復活させてある（決定73・76）。`test-start` /
+    // `test-end` を 6日目に復活させたのと同じ扱い（決定29）。
+    if (h == "trace-print" || h == "compile-print") {
         Instruction i(Op::LDC);
         i.p1 = g_true;
         emit(code, i, pos);
@@ -1964,7 +1998,9 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
     // 書き換えで済む特殊形式は expand_form_1 に任せて作り直す（決定20）
     if (h == "quasiquote" || h == "let" || h == "let*" || h == "letrec" ||
         h == "and" || h == "or" || h == "cond" || h == "case" || h == "do") {
-        comp(expand_form_1(expr), env, code, tail, pos);
+        ValuePtr rewritten = expand_form_1(expr);
+        if (g_macro_print) macro_print_step("special form", expr, rewritten);
+        comp(rewritten, env, code, tail, pos);
         return;
     }
 
@@ -2088,6 +2124,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
 
     ValuePtr expanded = macro_expand_1_expr(expr);
     if (expanded != expr) {
+        if (g_macro_print) macro_print_step("macro", expr, expanded);
         comp(expanded, env, code, tail, pos);
         return;
     }
@@ -3478,6 +3515,16 @@ static ValuePtr prim_trace_on(ValuePtr*, std::size_t) {
     std::printf("Trace mode: ON\n");
     return make_symbol(":trace-on");
 }
+// (macro-print) — 原典と同じ**切り替え**で、切り替えた後の値を返す
+// （原典は `(list* 'ldc *macro-print-flag* code)`）。名前も返り値も原典に
+// 合わせるのは、`test-start` / `test-end` を復活させたときと同じ判断
+// （決定29・77）。scheme13 流の `-on` / `-off` の対にはしない。
+static ValuePtr prim_macro_print(ValuePtr*, std::size_t n) {
+    need_args("macro-print", n, 0, 0);
+    g_macro_print = !g_macro_print;
+    std::printf("Macro expansion trace: %s\n", g_macro_print ? "ON" : "OFF");
+    return make_bool(g_macro_print);
+}
 static ValuePtr prim_trace_off(ValuePtr*, std::size_t) {
     g_trace_mode = false;
     std::printf("Trace mode: OFF\n");
@@ -3603,6 +3650,7 @@ Expansion:
 Tracing:
   (trace-on)            Enable VM step-by-step trace
   (trace-off)           Disable trace
+  (macro-print)         Toggle tracing of macro/special-form expansion
 
 Leaving:
   (exit)                Quit; (exit n) sets the exit status
@@ -3705,6 +3753,7 @@ static void init_globals() {
 
         {"compile", prim_compile_show}, {"disassemble", prim_disassemble},
         {"trace-on", prim_trace_on}, {"trace-off", prim_trace_off},
+        {"macro-print", prim_macro_print},
         {"globals", prim_globals}, {"macros", prim_macros}, {"help", prim_help},
         {"macroexpand-1", prim_macroexpand_1}, {"macroexpand", prim_macroexpand},
     };

@@ -6,10 +6,10 @@
 
 **`test-case6.scm` の 1 件だけは scheme13 の出力で採り直してある。**
 
-残る3件（`lib13_test.scm` / `port_test.scm` / `exit_test.scm`）は**既存資産では
-なく scheme13 自身のテスト**で、scheme12 には比べる相手が存在しない。こちらも
-scheme13 の出力をゴールデンにしてある。**`./scheme12_debug` を渡すとこの4件が
-落ちる。それは正常。**
+残る4件（`lib13_test.scm` / `port_test.scm` / `exit_test.scm` /
+`macro_print_test.scm`）は**既存資産ではなく scheme13 自身のテスト**で、
+scheme12 には比べる相手が存在しない。こちらも scheme13 の出力をゴールデンに
+してある。**`./scheme12_debug` を渡すとこの5件が落ちる。それは正常。**
 
 | 種類 | 件数 | ゴールデンの出どころ |
 | --- | --- | --- |
@@ -18,11 +18,15 @@ scheme13 の出力をゴールデンにしてある。**`./scheme12_debug` を�
 | `lib13_test.scm`（R5RS の補い。8日目、13日目に多値と dynamic-wind を追加） | 1 | scheme13 |
 | `port_test.scm`（ポート。10日目） | 1 | scheme13 |
 | `exit_test.scm`（`exit`。15日目） | 1 | scheme13 |
+| `macro_print_test.scm`（`macro-print`。17日目） | 1 | scheme13 |
 
 `exit_test.scm` は**出力だけでなく終了コード（3）が本体**である。
 `.scm` 1本では `exit` を一度しか呼べないので、終了コードの一覧
 （引数なし / `#t` / `#f` / 整数 / `quit`）はゴールデンではなく
 `run_golden.sh` の「終了コード」の節が式ごとに見ている（決定70）。
+
+`macro_print_test.scm` の出力には**ソース位置（行・桁）が乗る**。
+**このファイルの行を動かすとゴールデンがずれる**ので、足すときは末尾に足すこと。
 
 ## なぜこの 1 件だけ別扱いなのか
 

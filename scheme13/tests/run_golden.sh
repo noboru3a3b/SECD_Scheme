@@ -42,7 +42,7 @@ trap 'rm -f "$tmp"' EXIT
 # なく scheme13 の出力をゴールデンにしてある（scheme12 には lib13.scm が
 # 無いので比べる相手が存在しない）。**./scheme12_debug を渡すと落ちる。**
 OWN_TESTS="scheme13/tests/lib13_test.scm scheme13/tests/port_test.scm \
-           scheme13/tests/exit_test.scm"
+           scheme13/tests/exit_test.scm scheme13/tests/macro_print_test.scm"
 
 run_one() {
     f=$1

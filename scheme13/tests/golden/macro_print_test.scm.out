@@ -1,0 +1,26 @@
+Macro expansion trace: ON
+
+==== Expand (macro) scheme13/tests/macro_print_test.scm:19:10 ====
+from: (inc (inc 5))
+  to: (+ (inc 5) 1)
+
+==== Expand (macro) scheme13/tests/macro_print_test.scm:19:15 ====
+from: (inc 5)
+  to: (+ 5 1)
+7
+
+==== Expand (special form) scheme13/tests/macro_print_test.scm:23:10 ====
+from: (let ((a (twice 3))) (cond ((> a 5) (quote big)) (else (quote small))))
+  to: ((lambda (a) (cond ((> a 5) (quote big)) (else (quote small)))) (twice 3))
+
+==== Expand (macro) scheme13/tests/macro_print_test.scm:23:19 ====
+from: (twice 3)
+  to: (+ 3 3)
+
+==== Expand (special form) scheme13/tests/macro_print_test.scm:23:31 ====
+from: (cond ((> a 5) (quote big)) (else (quote small)))
+  to: (if (> a 5) (quote big) (quote small))
+big
+Macro expansion trace: OFF
+5
+NIL
