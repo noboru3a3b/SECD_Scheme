@@ -189,3 +189,33 @@
                        (begin (vector-set! v i x) (go (+ i 1)))
                        :undef))))
       (go 0))))
+
+;;; ------------------------------------------------- 多値と dynamic-wind
+
+;;; call-with-values は producer の結果の箱を開けて consumer に渡すだけ。
+;;; 多値は「1個なら値そのもの、それ以外は Values の箱」なので、
+;;; %values->list はどちらでもリストにして返す（決定58）。
+
+(define call-with-values
+  (lambda (producer consumer)
+    (apply consumer (%values->list (producer)))))
+
+;;; dynamic-wind の**普通の道**はここに書けばよい。before を呼び、枠を積み、
+;;; thunk を呼び、枠を降ろして after を呼ぶ。
+;;;
+;;; **脱出と再入は書かない。** thunk の中から継続で外へ跳ぶと、%wind-pop も
+;;; (after) も飛ばされるが、枠は積まれたままなので、継続を起動する側が
+;;; 差分の after を走らせる（決定59。セクション10 の build_rewind_code）。
+;;; 再入も同じ仕組みで before が走る。
+;;;
+;;; before を呼んでから枠を積む順序に意味がある。before 自身が脱出したときに
+;;; after を呼ばせないため（R5RS もそう定めている）。
+
+(define dynamic-wind
+  (lambda (before thunk after)
+    (before)
+    (%wind-push before after)
+    (let ((result (thunk)))
+      (%wind-pop)
+      (after)
+      result)))

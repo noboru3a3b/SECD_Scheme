@@ -288,7 +288,7 @@ using ValueVec = GcVec<ValuePtr>;
 enum class Tag : std::uint8_t {
     Fixnum,       // ヘッダを持たない即値。tag_of() だけが返す
     Nil, Boolean, Bignum, String, Symbol, Pair, Vector,
-    Closure, Continuation, Primitive, Macro, SpecialForm, Port, Eof
+    Closure, Continuation, Primitive, Macro, SpecialForm, Port, Eof, Values
 };
 
 // ヘッダ 12 バイト（tag / src_col / src_file / src_line）。
@@ -385,9 +385,25 @@ struct DumpEntry {
 
 // 継続は機械の状態のスナップショット。S とダンプはコピーして持ち、
 // 環境（Env*）は共有する（set! が捕捉をまたいで見えるのが正しい意味論）。
+// (values a b ...) の結果。**1個のときは値そのもの**を返すので、この型が
+// 現れるのは0個または2個以上のときだけ（13日目の決定58）。
+struct Values : Object {
+    ValueVec vals;
+    Values() : Object(Tag::Values) {}
+};
+
+// dynamic-wind の1段。id は「同じ枠か」を見るための通し番号で、同じ
+// before/after の組が入れ子で二度積まれても別物と分かるようにする（決定59）。
+struct WindEntry {
+    ValuePtr      before;
+    ValuePtr      after;
+    std::uint64_t id;
+};
+
 struct Continuation : Object {
     ValueVec          stack;
     GcVec<DumpEntry>  dump;
+    GcVec<WindEntry>  winds;      // 捕捉した時点の dynamic-wind の入れ子（決定59）
     CodePtr           c    = nullptr;
     std::uint32_t     pc   = 0;
     Env*              env  = nullptr;
@@ -466,6 +482,11 @@ static ValuePtr g_eof   = nullptr;
 // display などの既定の出力先もここから取る（10日目の決定48）。
 static ValuePtr g_stdin_port  = nullptr;
 static ValuePtr g_stdout_port = nullptr;
+
+// いま入っている dynamic-wind の入れ子。**動的エクステントは1本しかない**ので
+// 大域に置く。継続はこれのコピーを持ち、起動時に差分だけ巻き戻す（決定59）。
+static RootVec<WindEntry> g_winds;
+static std::uint64_t      g_wind_next_id = 1;
 
 // --- 構築 ------------------------------------------------------------------
 
@@ -738,6 +759,13 @@ static void write_value(std::string& out, ValuePtr v, PathSet& path) {
             write_params(out, static_cast<Closure*>(v)->tmpl);
             out += '>';
             return;
+        case Tag::Values: {
+            Values* mv = static_cast<Values*>(v);
+            out += "#<values";
+            for (ValuePtr x : mv->vals) { out += ' '; write_value(out, x, path); }
+            out += '>';
+            return;
+        }
         case Tag::Continuation:
             out += "#<continuation>";
             return;
@@ -2208,6 +2236,46 @@ struct VM {
         return current;
     }
 
+    // いまの入れ子が継続の捕捉時と同じか（決定59）
+    static bool winds_match(const GcVec<WindEntry>& want) {
+        if (g_winds.size() != want.size()) return false;
+        for (std::size_t i = 0; i < want.size(); ++i)
+            if (g_winds[i].id != want[i].id) return false;
+        return true;
+    }
+
+    // 継続を起動する前に走らせる命令列を組み立てる（決定59）。
+    //
+    //   出る枠の after を内側から、入る枠の before を外側から呼び、
+    //   最後にこの継続をもう一度起動する。二度目は入れ子が一致しているので
+    //   上の速い道に入る。**コンパイラは通さない。** 命令列は
+    //   「定数を積んで呼んで捨てる」の繰り返しでしかないので直接組む。
+    static CodePtr build_rewind_code(Continuation* k, ValuePtr v, const SourcePos& pos) {
+        std::size_t common = 0;
+        while (common < g_winds.size() && common < k->winds.size() &&
+               g_winds[common].id == k->winds[common].id) ++common;
+
+        CodePtr code = new Code();
+        auto call_thunk = [&](ValuePtr thunk) {
+            Instruction ldc(Op::LDC); ldc.p1 = thunk; emit(code, ldc, pos);
+            Instruction app(Op::APP); app.a = 0;      emit(code, app, pos);
+            emit(code, Instruction(Op::POP), pos);
+        };
+        for (std::size_t i = g_winds.size(); i > common; --i)   // 出る: 内側から
+            call_thunk(g_winds[i - 1].after);
+        for (std::size_t i = common; i < k->winds.size(); ++i)  // 入る: 外側から
+            call_thunk(k->winds[i].before);
+
+        // 入れ子は先に合わせておく。after / before の中でさらに脱出された
+        // ときに、同じ枠をもう一度巻き戻さないため。
+        g_winds.assign(k->winds.begin(), k->winds.end());
+
+        Instruction lv(Op::LDC); lv.p1 = v; emit(code, lv, pos);
+        Instruction lk(Op::LDC); lk.p1 = k; emit(code, lk, pos);
+        Instruction ap(Op::APP); ap.a = 1;  emit(code, ap, pos);
+        return code;
+    }
+
     void do_call(ValuePtr callee, std::size_t argp, std::size_t n,
                  const Instruction& ins, bool tail) {
         switch (tag_of(callee)) {
@@ -2218,10 +2286,20 @@ struct VM {
                 return;
             }
             case Tag::Continuation: {
-                // 起動は機械の状態をまるごと差し替える。捕捉したスナップショットは
-                // 何度でも起動できるよう、move ではなく copy する。
                 ValuePtr v = (n == 0) ? g_nil : stack[argp];
                 Continuation* k = static_cast<Continuation*>(callee);
+
+                // dynamic-wind の入れ子が捕捉時と違うなら、**先に差分の
+                // after / before を走らせる**（決定59）。走らせ終えたら
+                // この継続をもう一度起動するだけの命令列へ跳ぶ。
+                if (!winds_match(k->winds)) {
+                    c  = build_rewind_code(k, v, ins.pos);
+                    pc = 0;
+                    return;
+                }
+
+                // 起動は機械の状態をまるごと差し替える。捕捉したスナップショットは
+                // 何度でも起動できるよう、move ではなく copy する。
                 stack = k->stack;
                 dump  = k->dump;
                 stack.push_back(v);
@@ -2402,6 +2480,7 @@ struct VM {
                     Continuation* k = new Continuation();
                     k->stack = stack;      // コピー（何度でも起動できるように）
                     k->dump  = dump;
+                    k->winds.assign(g_winds.begin(), g_winds.end());   // 決定59
                     k->c = c; k->pc = pc; k->env = env; k->base = base;
 
                     std::size_t argp = stack.size();
@@ -3228,6 +3307,40 @@ static ValuePtr prim_current_output_port(ValuePtr*, std::size_t n) {
     return g_stdout_port;
 }
 
+// --- 多値と dynamic-wind ---------------------------------------------------
+//
+// **多値は「1個なら値そのもの、それ以外は Values オブジェクト」**（決定58）。
+// VM が返り値を複数運ぶ設計にはしない。call-with-values はこの箱を開けて
+// apply するだけなので、lib13.scm 側に Scheme で書ける。
+//
+// dynamic-wind は lib13.scm に Scheme で書き、C++ 側は入れ子の記録
+// （%wind-push / %wind-pop）だけを持つ。巻き戻しは継続の起動側（セクション10）。
+
+static ValuePtr prim_values(ValuePtr* a, std::size_t n) {
+    if (n == 1) return a[0];              // 1個なら箱に入れない
+    Values* mv = new Values();
+    mv->vals.assign(a, a + n);
+    return mv;
+}
+static ValuePtr prim_values_to_list(ValuePtr* a, std::size_t n) {
+    need_args("%values->list", n, 1, 1);
+    if (!has_tag(a[0], Tag::Values)) return make_pair(a[0], g_nil);   // 1値
+    Values* mv = static_cast<Values*>(a[0]);
+    ValuePtr out = g_nil;
+    for (std::size_t i = mv->vals.size(); i > 0; --i) out = make_pair(mv->vals[i - 1], out);
+    return out;
+}
+static ValuePtr prim_wind_push(ValuePtr* a, std::size_t n) {
+    need_args("%wind-push", n, 2, 2);
+    g_winds.push_back(WindEntry{a[0], a[1], g_wind_next_id++});
+    return g_nil;
+}
+static ValuePtr prim_wind_pop(ValuePtr*, std::size_t n) {
+    need_args("%wind-pop", n, 0, 0);
+    if (!g_winds.empty()) g_winds.pop_back();
+    return g_nil;
+}
+
 // --- その他 ----------------------------------------------------------------
 
 // (error message irritant ...) — SRFI-23。**Scheme で書いたライブラリが
@@ -3532,6 +3645,9 @@ static void init_globals() {
         {"current-output-port", prim_current_output_port},
         {"input-port?", prim_input_portp}, {"output-port?", prim_output_portp},
         {"load", prim_load},
+
+        {"values", prim_values}, {"%values->list", prim_values_to_list},
+        {"%wind-push", prim_wind_push}, {"%wind-pop", prim_wind_pop},
 
         {"error", prim_raise_error},
         {"gensym", prim_gensym}, {"random", prim_random}, {"random-seed", prim_random_seed},
@@ -4362,6 +4478,17 @@ static void selftest_eval() {
     check_eq("named let still recurses",
              eval_to_string("(let loop ((i 0) (acc '())) "
                             "  (if (= i 3) acc (loop (+ i 1) (cons i acc))))"), "(2 1 0)");
+
+    // --- 多値（13日目の決定58）---
+    // **1個なら箱に入れない。** それ以外だけ Values オブジェクトになる。
+    check_eq("values of one is the value", eval_to_string("(values 5)"),      "5");
+    check_eq("values of two",              eval_to_string("(values 1 2)"),    "#<values 1 2>");
+    check_eq("values of none",             eval_to_string("(values)"),        "#<values>");
+    check_eq("values keeps write form",    eval_to_string("(values \"a\" 1)"),
+                                           "#<values \"a\" 1>");
+    check_eq("values->list of a box",  eval_to_string("(%values->list (values 1 2))"), "(1 2)");
+    check_eq("values->list of one",    eval_to_string("(%values->list 7)"),            "(7)");
+    check_eq("values->list of none",   eval_to_string("(%values->list (values))"),     "NIL");
 
     // --- ポート（10日目の決定46〜50）---
     // 標準ポートは**値**として1つずつあり、毎回作り直さない

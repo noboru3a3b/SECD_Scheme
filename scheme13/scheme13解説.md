@@ -244,6 +244,7 @@ static inline ValuePtr make_fixnum(std::intptr_t n) {
 | `SpecialForm` | `SpecialForm` | `if` などの値としての姿 |
 | `Port` | `Port` | `FILE*`、入出力の別、閉じたかどうか |
 | `Eof` | シングルトン `g_eof` | ファイル終端 |
+| `Values` | `Values` | 多値の箱。**1個のときは作らない**（第10.10節） |
 
 **重要な帰結**（`dev_memo.md` §2.2）:
 
@@ -287,6 +288,15 @@ struct Template : public gc {
 | 継続 | `#<continuation>` |
 | `eof-object` | `#<eof>` |
 | 閉じたポート | `#<closed-port>` |
+
+**scheme12 に無い型の表示**（凍結仕様の表は1行も変えていない。
+新しい型が増えたぶんだけ増える）:
+
+| 式 | 出力 |
+| --- | --- |
+| `(current-output-port)` | `#<output-port>` |
+| `(values 1 2)` | `#<values 1 2>` |
+| `(values)` | `#<values>` |
 
 `display` と `write` の違いは**文字列を引用符で囲むかどうかだけ**。
 リストの要素にある文字列は `display` でも引用符つきで出る（`("x" y)`）。
@@ -968,11 +978,39 @@ Fatal error: t.scm:2:1: f: wrong number of arguments
 Continuation* k = new Continuation();
 k->stack = stack;      // コピー（何度でも起動できるように）
 k->dump  = dump;
+k->winds.assign(g_winds.begin(), g_winds.end());   // dynamic-wind の入れ子
 k->c = c; k->pc = pc; k->env = env; k->base = base;
 ```
 
 起動は状態をまるごと差し替える。捕捉したスナップショットは **move ではなく
 copy** する。1つの継続を何度でも起動できるようにするため。
+
+#### dynamic-wind との噛み合わせ
+
+継続は**捕捉した時点の `dynamic-wind` の入れ子**（`g_winds` のコピー）も
+持つ。起動するとき、いまの入れ子と捕捉時の入れ子を比べ、違えば
+**差分だけ巻き戻してから**状態を差し替える（`dev_memo.md` 決定59）。
+
+1. 共通の先頭を求める（枠の通し番号 `id` で比べる。同じ `before`/`after` の
+   組が入れ子で二度積まれても別物と分かる）
+2. **出る枠の `after` を内側から**、**入る枠の `before` を外側から**呼ぶ
+3. 最後にこの継続をもう一度起動する。二度目は入れ子が一致しているので
+   まっすぐ差し替わる
+
+2 と 3 は**その場で組んだ命令列**（`build_rewind_code`）で行う。
+コンパイラは通さない。中身は「定数を積んで呼んで捨てる」の繰り返しでしかない。
+
+```
+LDC <after>   APP 0   POP      ← 出る枠のぶんだけ繰り返す
+LDC <before>  APP 0   POP      ← 入る枠のぶんだけ繰り返す
+LDC <値>      LDC <継続>  APP 1
+```
+
+**なぜ VM の中でやるのか。** `dynamic-wind` の普通の道（`before` → `thunk`
+→ `after`）は Scheme で書けるが（`lib13.scm`）、脱出と再入は
+**継続を起動する側にしか分からない**。プリミティブから Scheme を呼び戻す
+入口は `apply_callable`（VM をもう1つ回す）しか無く、そこで継続を捕捉すると
+内側の VM だけを捕まえてしまう。だから巻き戻しは `do_call` に置いた。
 
 凍結仕様（`dev_memo.md` §2.7）:
 
@@ -1115,17 +1153,21 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | 層 | 実体 | 個数 |
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
-| プリミティブ | C++ の関数ポインタ | 106 |
-| ライブラリ | Scheme で書かれた定義 | 66（`system_lib.scm` 33 + `lib13.scm` 33） |
+| プリミティブ | C++ の関数ポインタ | 110 |
+| ライブラリ | Scheme で書かれた定義 | 68（`system_lib.scm` 33 + `lib13.scm` 35） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **200 個**の大域名が起動時に定義される。数え方:
+合計 **206 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 200
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 106
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 206
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 110
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
+
+`%` で始まる3つ（`%values->list` / `%wind-push` / `%wind-pop`）は
+**`lib13.scm` が使うための内部名**で、利用者が直接呼ぶものではない
+（第10.10節）。
 
 `system_lib.scm` は 34 個の `define` と 1 個の `define-macro`（`delay`）を
 持つが、`cdddr` と `memv` はプリミティブが先に定義済みなので読み飛ばされ、
@@ -1142,7 +1184,7 @@ let  let*  letrec  and  or  cond  case  do  quasiquote
 **値としては特殊形式オブジェクト**として大域に束縛されている。
 `(procedure? call/cc)` が `FALSE` なのはこのため。
 
-### 10.3 プリミティブ（106）
+### 10.3 プリミティブ（110）
 
 ```cpp
 using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
@@ -1160,6 +1202,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | 文字列 | `string-length` `string-ref` `string-set!` `make-string` `string-append` `substring` `string=?` `string<?` `string>?` `string<=?` `string>=?` `char->integer` `integer->char` `string->list` `list->string` `symbol->string` `string->symbol` `number->string` `string->number` |
 | ベクタ | `make-vector` `vector` `vector-length` `vector-ref` `vector-set!` `vector->list` `list->vector` |
 | 入出力 | `display` `write` `newline` `write_newline` `write-char` `open-input-file` `open-output-file` `close-input-port` `close-output-port` `read` `read-char` `peek-char` `char-ready?` `read-line` `read-expr` `current-input-port` `current-output-port` `input-port?` `output-port?` `load` |
+| 多値・動的拡張 | `values` `%values->list` `%wind-push` `%wind-pop` |
 | その他 | `error` `gensym` `random` `random-seed` `gc-collect` `gc-heap-size` `gc-free-bytes` |
 | テスト機構 | `test-start` `test-end` |
 | デバッグ | `compile` `disassemble` `trace-on` `trace-off` `globals` `macros` `help` `macroexpand-1` `macroexpand` |
@@ -1191,7 +1234,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | ファイル | 中身 | 所有 |
 | --- | --- | --- |
 | `system_lib.scm` | `map` `filter` `for-each` `fold-left` `fold-right` `reverse` `memv` `assv` `caaar` 系、遅延評価（`delay`/`force`）、キュー、素数、その他 | **scheme12 と共有。触らない** |
-| `scheme13/lib13.scm` | R5RS にあって scheme13 に無かった 33 個 | scheme13 |
+| `scheme13/lib13.scm` | R5RS にあって scheme13 に無かった 35 個 | scheme13 |
 
 **順序に意味がある。** `load_library_dedup` は定義済みの名前を飛ばすので、
 先に読んだほうが勝つ。`system_lib.scm` を先に読むことで、**既存資産の
@@ -1207,7 +1250,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 理由づけ自体は正しい（C++ のループフレームは継続に素通りされない）ので、
 **将来これらをプリミティブ化しようとするときは、この点を思い出すこと。**
 
-### 10.6 lib13.scm（33）
+### 10.6 lib13.scm（35）
 
 入れる基準は **「R5RS にあって scheme13 に無いもの」の一本**。
 `sort` / `reduce` / `string-upcase` のような便利な非標準手続きは入れない
@@ -1220,6 +1263,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | 丸め | `floor` `ceiling` `truncate` `round` |
 | リスト | `list-tail` `list-ref` `member` `assoc` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
+| 多値・動的拡張 | `call-with-values` `dynamic-wind` |
 
 凍結仕様に合わせた判断:
 
@@ -1347,6 +1391,44 @@ scheme13: warning: system_lib.scm not found; the shared library
 ;  端末で入力待ちなら FALSE、パイプにデータが来ていれば TRUE
 ```
 
+### 10.10 多値
+
+**多値は「1個なら値そのもの、それ以外は `Values` の箱」**とした
+（`dev_memo.md` 決定58）。VM が返り値を複数運ぶ設計にはしていない。
+
+```scheme
+(values 5)                                        ; => 5          箱に入れない
+(values 1 2)                                      ; => #<values 1 2>
+(values)                                          ; => #<values>
+(call-with-values (lambda () (values 4 5)) (lambda (a b) b))   ; => 5
+(call-with-values (lambda () 7) list)             ; => (7)       1値も同じ扱い
+(call-with-values * -)                            ; => -1        R5RS 6.4 の例
+```
+
+`call-with-values` は `lib13.scm` に3行で書ける。
+
+```scheme
+(define call-with-values
+  (lambda (producer consumer)
+    (apply consumer (%values->list (producer)))))
+```
+
+`%values->list` は箱ならその中身のリスト、箱でなければ1要素のリストを返す。
+だから producer が1値を返しても多値を返しても同じ道で扱える。
+
+**R5RS との差**: 多値を受け取る用意のない継続へ渡したとき、R5RS は未規定
+（多くの処理系ではエラー）だが、scheme13 では `#<values 1 2>` という**値が
+1つ**流れる。踏むと型エラーになって場所も出るので、黙って壊れることはない。
+
+```
+(car (values 1 2))
+;  car: wrong type of argument
+;    expected: a pair
+;    given: #<values 1 2>
+```
+
+`dynamic-wind` の実装は第8.3節を見ること。
+
 ---
 
 ## 11. REPL とデバッグ機能
@@ -1464,7 +1546,7 @@ make -C scheme13 test       #  17 passed — 既存 .scm 資産との互換性�
 make -C scheme13 bench      # 呼び出し性能
 ```
 
-### 12.1 --selftest（176項目）
+### 12.1 --selftest（183項目）
 
 処理系を C++ 単体で検査する。**起動時ライブラリを読む前に走る**ので、
 ここで見られるのは処理系そのものだけである。
@@ -1564,7 +1646,7 @@ scheme12 に渡しているので、**`NIL` / `TRUE` / `FALSE` という名前�
 | 大域名 | **差ゼロ**（scheme12 の 156 個すべてあり） | `(globals)` の集合を `comm` |
 | 既存 `.scm` 資産の出力 | **11/12 がバイト単位で一致** | ゴールデン |
 | 構文・マクロ展開 | 15件一致 | `make compare` |
-| 凍結仕様 §2 | 176項目で固定 | `make selftest` |
+| 凍結仕様 §2 | 183項目で固定 | `make selftest` |
 
 名前の集合を測る手順（主張するなら必ずこれで測ること。
 `dev_memo.md` 決定40）:
@@ -1600,13 +1682,14 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 ### 13.3 上位互換であること
 
-scheme13 は **200 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **206 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
-差分の 44 個: `lib13.scm` の 33 個 + `error` + `macroexpand-1` +
+差分の 50 個: `lib13.scm` の 35 個 + `error` + `macroexpand-1` +
 `macroexpand` + `test-start` + `test-end` + ポートの 6 個
 （`current-input-port` `current-output-port` `input-port?` `output-port?`
-`peek-char` `char-ready?`）。
+`peek-char` `char-ready?`）+ 多値と動的拡張の 4 個
+（`values` と内部名 3 つ）。
 
 port 引数を**省けるようになった**手続きもある（`write-char` `read-char`
 `read-line` `read` `read-expr`）。scheme12 は必ずポートを要求した。
@@ -1614,7 +1697,7 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ### 13.4 証拠の範囲
 
-一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 176 項目**で、
+一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 183 項目**で、
 証明ではない。とくに、**既存資産はどれもエラーを踏まずに走りきる**ので、
 ゴールデンが押さえているのは「正常に走るプログラムの出力」だけである。
 エラー経路の互換性は測っていない（意図的に変えたので、測る意味も薄い）。
@@ -1634,21 +1717,25 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ## 14. 既知の制限と拡張ポイント
 
-### 14.1 R5RS で未実装のもの（2つ）
+### 14.1 R5RS で未実装のもの
 
-40件あった不足を 8 件（8日目、`lib13.scm`）、さらに **2 件**（10日目、ポート）まで
-縮めた。残りは2つとも VM か継続に手が要る。
+**8日目に数え上げた 40 件の不足は、13日目にすべて埋まった。**
 
-| 名前 | なぜ Scheme で書けないか | 重さ |
+| 日 | 埋めたもの | 残り |
 | --- | --- | --- |
-| `values` `call-with-values` | 多値。VM が返り値を複数運ぶ必要がある | 重 |
-| `dynamic-wind` | 継続の出入りにフックが要る。§2.7 の「トップレベルを跨ぐ継続」との噛み合わせも要検討 | 重 |
+| 8日目 | `lib13.scm`（33個） | 8 |
+| 10日目 | ポート6個（第10.9節） | 2 |
+| 13日目 | `values` `call-with-values` `dynamic-wind` | **0** |
+
+いま無いのは、8日目の数え上げに入っていなかったファイル入出力の便宜手続きである。
+
+| 名前 | いま何が要るか |
+| --- | --- |
+| `call-with-input-file` / `call-with-output-file` | **Scheme で3行ずつ書ける。** 開いて渡して閉じるだけ |
+| `with-input-from-file` / `with-output-to-file` | 標準ポートを差し替える口（`g_stdout_port` を入れ替えるプリミティブ）が1つ要る。戻す責任は `dynamic-wind` が持てるようになった |
 
 **どれも「無くて困った」という報告は来ていない。**
-
-`with-input-from-file` / `with-output-to-file` も無い。こちらは標準ポートを
-差し替えれば書けるが、動的な差し替えは継続との噛み合わせが要るので保留
-（第10.9節）。
+入れるかどうかは `lib13.scm` の基準（第10.6節）ごと利用者と決める話である。
 
 ### 14.2 設計として入れないもの
 
@@ -2044,7 +2131,7 @@ clang++ -std=c++17 -Wall -Wextra -O2 -Wno-unused-function \
 | ターゲット | 内容 |
 | --- | --- |
 | `all` | ビルド |
-| `selftest` | 凍結仕様との突き合わせ（176項目） |
+| `selftest` | 凍結仕様との突き合わせ（183項目） |
 | `compare` | 構文展開が scheme12 と等価か（15件） |
 | `test` | 既存 `.scm` 資産との互換性回帰（17件）← **受け入れ基準** |
 | `bench` | 呼び出し性能 |
@@ -2077,7 +2164,7 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
 └── scheme13/
     ├── scheme13.cpp            処理系（単一ファイル）
     ├── scheme13                実行ファイル
-    ├── lib13.scm               R5RS の不足 33 個
+    ├── lib13.scm               R5RS の不足 35 個
     ├── Makefile
     ├── dev_memo.md             設計憲章・凍結仕様・決定ログ
     ├── micro_scheme8_notes.md  原典の読解メモ
@@ -2085,7 +2172,7 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
     └── tests/
         ├── run_golden.sh       ゴールデン比較
         ├── compare_expand.sh   展開の等価性
-        ├── lib13_test.scm      lib13.scm の 75 項目テスト
+        ├── lib13_test.scm      lib13.scm の 102 項目テスト
         └── golden/             期待される出力
 ```
 

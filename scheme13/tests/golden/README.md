@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | 既存 `.scm` 資産 | 11 | scheme12（`88db98b`） |
 | `test-case6.scm` | 1 | scheme13（理由は下記） |
-| `lib13_test.scm`（R5RS の補い。8日目） | 1 | scheme13 |
+| `lib13_test.scm`（R5RS の補い。8日目、13日目に多値と dynamic-wind を追加） | 1 | scheme13 |
 | `port_test.scm`（ポート。10日目） | 1 | scheme13 |
 
 ## なぜこの 1 件だけ別扱いなのか

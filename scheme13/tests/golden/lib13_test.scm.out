@@ -73,6 +73,33 @@ FALSE                                              pass
 "zzz"                                              pass
 :undef                                             pass
 #(7 7 7)                                           pass
+5                                                  pass
+(1 2)                                              pass
+(7)                                                pass
+NIL                                                pass
+5                                                  pass
+(1 2 3)                                            pass
+(7)                                                pass
+NIL                                                pass
+-1                                                 pass
+wind-log                                           pass
+wind-note                                          pass
+wind-reset                                         pass
+42                                                 pass
+(in out)                                           pass
+NIL                                                pass
+escaped                                            pass
+(in out)                                           pass
+NIL                                                pass
+deep                                               pass
+(a-in b-in b-out a-out)                            pass
+NIL                                                pass
+from-before                                        pass
+(b)                                                pass
+NIL                                                pass
+2                                                  pass
+(before after before after)                        pass
+(connect talk1 disconnect connect talk2 disconnect)  pass
 
-( total: 75  pass: 75  NG: 0 )
+( total: 102  pass: 102  NG: 0 )
 NIL

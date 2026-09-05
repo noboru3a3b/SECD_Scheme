@@ -6,6 +6,11 @@
 ;   scheme13/tests/run_golden.sh がこれを走らせ、出力全体をゴールデンと
 ;   バイト単位で比べる。--selftest では見られない（あちらはライブラリを
 ;   読む前に走る C++ 単体の回帰なので）。
+;
+; 末尾に多値と dynamic-wind の項目がある（13日目の決定58・59）。
+; **継続を使う項目は1つのフォームの中に閉じて書くこと。** トップレベルの
+; フォームを跨いで継続を起動すると、そのフォームの残りは実行されずに
+; 次のフォームへ進む（凍結仕様 §2.7）ので、テスト機構の照合がずれる。
 
 (test-start)
 TRUE
@@ -253,5 +258,133 @@ FALSE
 
 (let ((v (make-vector 3 0))) (vector-fill! v 7) v)
 #(7 7 7)
+
+;;; --- 多値（13日目の決定58）---
+;;; 1個のときは箱に入れない。#<values ...> は読み戻せないので、
+;;; 箱そのものは %values->list を通して確かめる（表示は --selftest が押さえる）。
+
+(values 5)
+5
+
+(%values->list (values 1 2))
+(1 2)
+
+(%values->list 7)
+(7)
+
+(%values->list (values))
+NIL
+
+(call-with-values (lambda () (values 4 5)) (lambda (a b) b))
+5
+
+(call-with-values (lambda () (values 1 2 3)) list)
+(1 2 3)
+
+(call-with-values (lambda () 7) list)
+(7)
+
+(call-with-values (lambda () (values)) list)
+NIL
+
+; R5RS 6.4 の例。(*) は 1 なので (- 1) で -1
+(call-with-values * -)
+-1
+
+;;; --- dynamic-wind（13日目の決定59）---
+
+(define wind-log '())
+wind-log
+
+(define wind-note (lambda (x) (set! wind-log (cons x wind-log))))
+wind-note
+
+(define wind-reset (lambda () (set! wind-log '())))
+wind-reset
+
+;;; 普通に通れば before → thunk → after の順
+
+(dynamic-wind (lambda () (wind-note 'in))
+              (lambda () 42)
+              (lambda () (wind-note 'out)))
+42
+
+(reverse wind-log)
+(in out)
+
+;;; 脱出しても after は走る
+
+(wind-reset)
+NIL
+
+(call/cc (lambda (esc)
+  (dynamic-wind (lambda () (wind-note 'in))
+                (lambda () (esc 'escaped) (wind-note 'NEVER))
+                (lambda () (wind-note 'out)))))
+escaped
+
+(reverse wind-log)
+(in out)
+
+;;; 入れ子の脱出は内側の after から
+
+(wind-reset)
+NIL
+
+(call/cc (lambda (esc)
+  (dynamic-wind (lambda () (wind-note 'a-in))
+    (lambda () (dynamic-wind (lambda () (wind-note 'b-in))
+                             (lambda () (esc 'deep))
+                             (lambda () (wind-note 'b-out))))
+    (lambda () (wind-note 'a-out)))))
+deep
+
+(reverse wind-log)
+(a-in b-in b-out a-out)
+
+;;; before の中で脱出したら after は走らない（枠を積む前だから）
+
+(wind-reset)
+NIL
+
+(call/cc (lambda (esc)
+  (dynamic-wind (lambda () (wind-note 'b) (esc 'from-before))
+                (lambda () (wind-note 'THUNK))
+                (lambda () (wind-note 'AFTER)))))
+from-before
+
+(reverse wind-log)
+(b)
+
+;;; 再入すると before がもう一度走る
+
+(wind-reset)
+NIL
+
+(let ((k #f) (n 0))
+  (dynamic-wind (lambda () (wind-note 'before))
+                (lambda () (call/cc (lambda (c) (set! k c))) (set! n (+ n 1)))
+                (lambda () (wind-note 'after)))
+  (if (< n 2) (k #f))
+  n)
+2
+
+(reverse wind-log)
+(before after before after)
+
+;;; R5RS 6.4 の例そのもの
+
+(let ((path '()) (c #f))
+  (let ((add (lambda (s) (set! path (cons s path)))))
+    (dynamic-wind
+      (lambda () (add 'connect))
+      (lambda ()
+        (add (call-with-current-continuation
+              (lambda (c0) (set! c c0) 'talk1))))
+      (lambda () (add 'disconnect)))
+    (if (< (length path) 4)
+        (c 'talk2)
+        (reverse path))))
+(connect talk1 disconnect connect talk2 disconnect)
 
 (test-end)
