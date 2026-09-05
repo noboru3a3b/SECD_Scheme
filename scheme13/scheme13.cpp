@@ -1703,6 +1703,7 @@ static void disassemble_ins(std::string& out, const Instruction& ins,
             const Template* t = ins.tmpl();
             out += ' ';
             write_params(out, t);
+            if (ins.b) out += " [no-alloc]";     // 直後の APP に消費される（決定54）
             if (!t->name.empty()) out += " ; " + to_std(t->name);
             if (depth_left > 0 && t->body) {
                 out += "\n";
@@ -2056,6 +2057,16 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
     ValueVec args = list_to_vector(rest, "application");
     for (ValuePtr a : args) comp(a, env, code, false, pos);
     comp(head, env, code, false, pos);
+
+    // **直前が LDF なら「作ってすぐ呼んで捨てる」閉包**である。演算子は最後に
+    // 評価されるので、APP の直前の命令は必ず被呼び出しを作る命令であり、
+    // それが LDF なら、その閉包はこの APP に消費されて即座に死ぬ。
+    // let / let* / letrec / 名前つき let / do はすべて ((lambda ...) ...) に
+    // 展開されるので、印を付けないと **let 1回につき閉包を1個確保する**
+    // ことになる（12日目の決定54。実測で閉包確保の 99.9996% がこれだった）。
+    if (!code->ins.empty() && code->ins.back().op == Op::LDF)
+        code->ins.back().b = 1;
+
     Instruction call(tail ? Op::TAPP : Op::APP);
     call.a = static_cast<std::uint16_t>(args.size());
     emit(code, call, pos);
@@ -2136,6 +2147,7 @@ struct VM {
     ValueVec         stack;
     GcVec<DumpEntry> dump;
     Env*             env  = nullptr;
+    Closure*         scratch = new Closure(nullptr, nullptr);   // 決定54
     CodePtr          c    = nullptr;
     std::uint32_t    pc   = 0;
     std::uint32_t    base = 0;
@@ -2266,8 +2278,19 @@ struct VM {
                     stack.push_back(cell->value);
                     break;
                 }
+                // b==1 は「この閉包は直後の APP に消費されて即座に死ぬ」印
+                // （決定54）。**呼び出し規約のスクラッチであって Scheme の値では
+                // ない。** argv がスタック上の区間を借りているのと同じ約束で、
+                // 保持してはならない。LDF と APP の間では何も走らないので、
+                // 捕捉も再入も起こり得ず、VM に1つあれば足りる。
                 case Op::LDF:
-                    stack.push_back(new Closure(ins.tmpl(), env));
+                    if (ins.b) {
+                        scratch->tmpl = ins.tmpl();
+                        scratch->env  = env;
+                        stack.push_back(scratch);
+                    } else {
+                        stack.push_back(new Closure(ins.tmpl(), env));
+                    }
                     break;
 
                 case Op::APP:
@@ -4311,6 +4334,35 @@ static void selftest_eval() {
     check_eq("integer->char",   eval_to_string("(integer->char 65)"),     "\"A\"");
     check_eq("do loop", eval_to_string("(do ((i 0 (+ i 1)) (acc 0 (+ acc i)))"
                                        " ((= i 5) acc))"), "10");
+    // --- 使い捨て閉包の印（12日目の決定54）---
+    // let は ((lambda ...) ...) に展開され、その lambda は APP に食われて
+    // 即座に死ぬ。**外へ逃げる閉包が巻き添えでスクラッチにならないこと**が
+    // ここで守るべき性質。
+    check_eq("let escapes as distinct closures",
+             eval_to_string("(define (f n) (let ((a n)) (lambda () a)))"
+                            "(define g1 (f 1)) (define g2 (f 2))"
+                            "(list (g1) (g2))"), "(1 2)");
+    check_eq("closures made in separate lets do not alias",
+             eval_to_string("(define fs (list (let ((n 1)) (lambda () n))"
+                            "                 (let ((n 2)) (lambda () n))))"
+                            "(list ((car fs)) ((car (cdr fs))))"), "(1 2)");
+    check_eq("nested let environments",
+             eval_to_string("(let ((a 1)) (let ((b 2)) (let ((c 3)) (list a b c))))"),
+             "(1 2 3)");
+    // let の init が閉包を作る場合、その閉包は逃げるので本物でなければならない
+    check_eq("closure bound by let is a real closure",
+             eval_to_string("(let ((h (lambda (x) (* x 2)))) (list (h 3) (h 4)))"), "(6 8)");
+    // 継続を let の中で捕まえる
+    check_eq("call/cc inside let",
+             eval_to_string("(+ 1 (let ((x 1)) (call/cc (lambda (k) (k 10) 999))))"), "11");
+    // apply の被呼び出しが lambda（APPLY 経路。印は付かない）
+    check_eq("apply on a literal lambda",
+             eval_to_string("(apply (lambda (x y) (+ x y)) '(3 4))"), "7");
+    // 名前つき let（閉包を作って再帰する）
+    check_eq("named let still recurses",
+             eval_to_string("(let loop ((i 0) (acc '())) "
+                            "  (if (= i 3) acc (loop (+ i 1) (cons i acc))))"), "(2 1 0)");
+
     // --- ポート（10日目の決定46〜50）---
     // 標準ポートは**値**として1つずつあり、毎回作り直さない
     check_eq("current-output-port", eval_to_string("(current-output-port)"), "#<output-port>");
