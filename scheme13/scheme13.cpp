@@ -1827,9 +1827,15 @@ static bool is_self_evaluating(ValuePtr v) {
     }
 }
 
-// lambda 本体をコンパイルして Template を作る
+// lambda 本体をコンパイルして Template を作る。
+//
+// `inherited` は呼び出し側（comp）が既に解決した位置。**これを受け取るのが
+// 肝心。** マクロや構文展開が作った lambda フォームは自分の位置を持たないので、
+// ここで nearest_pos(whole) を引き直すと**継承の鎖が切れて本体全体が位置を
+// 失う**（11日目の決定52）。
 static Template* compile_lambda(ValuePtr params_expr, ValuePtr body,
-                                const CompileEnv& env, ValuePtr whole) {
+                                const CompileEnv& env, ValuePtr whole,
+                                SourcePos inherited) {
     GcVec<GcString>         fixed;
     std::optional<GcString> rest;
     if (!extract_params(params_expr, fixed, rest))
@@ -1843,9 +1849,12 @@ static Template* compile_lambda(ValuePtr params_expr, ValuePtr body,
     if (rest) frame.push_back(*rest);
     env2.insert(env2.begin(), frame);
 
+    SourcePos body_pos = nearest_pos(whole);
+    if (!body_pos.known()) body_pos = inherited;
+
     CodePtr body_code = new Code();
-    comp_body(body, env2, body_code, true, nearest_pos(whole));
-    emit(body_code, Instruction(Op::RTN), nearest_pos(whole));
+    comp_body(body, env2, body_code, true, body_pos);
+    emit(body_code, Instruction(Op::RTN), body_pos);
 
     Template* t = new Template();
     t->params = fixed;
@@ -1947,7 +1956,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
     if (h == "lambda") {
         check_arity("lambda", expr, rest, 1, 0);
         Instruction i(Op::LDF);
-        i.p1 = compile_lambda(car(rest), cdr(rest), env, expr);
+        i.p1 = compile_lambda(car(rest), cdr(rest), env, expr, pos);
         emit(code, i, pos);
         return;
     }
@@ -1974,7 +1983,7 @@ static void comp(ValuePtr expr, const CompileEnv& env, CodePtr code, bool tail,
         } else if (is_pair(lhs) && is_symbol(car(lhs))) {
             name = car(lhs);
             Instruction i(Op::LDF);
-            i.p1 = compile_lambda(cdr(lhs), rhs_tail, env, expr);
+            i.p1 = compile_lambda(cdr(lhs), rhs_tail, env, expr, pos);
             emit(code, i, pos);
         } else {
             syntax_error(form,
@@ -2058,7 +2067,7 @@ static void comp_body(ValuePtr body, const CompileEnv& env, CodePtr code, bool t
     if (forms.empty()) {
         Instruction i(Op::LDC);
         i.p1 = g_nil;
-        emit(code, i, SourcePos{});
+        emit(code, i, inherited);
         return;
     }
     for (std::size_t i = 0; i < forms.size(); ++i) {
@@ -4067,6 +4076,19 @@ static std::string eval_error_body(const std::string& src) {
     }
 }
 
+// 同じだが、エラーが**どこを指したか**だけを "行:桁" で返す。位置が付かな
+// かったら "no position"。マクロ展開後の位置を固定するためのもの（決定52）。
+static std::string eval_error_at(const std::string& src) {
+    std::uint16_t id = source_intern("<selftest>", src);
+    try {
+        for (const TopForm& f : read_all(id)) eval_top(f.expr, f.pos);
+        return "no error";
+    } catch (const SchemeError& e) {
+        if (!e.pos.known()) return "no position";
+        return std::to_string(e.pos.line) + ":" + std::to_string(e.pos.col);
+    }
+}
+
 // エラー本文の形（決定33）。**見出し1行 + 字下げした詳細行**であること、
 // 詳細が expected: / given: の順であること、内部エラーが利用者の誤りと
 // 区別されること。ここが崩れると、読む側が毎回違う場所を探すことになる。
@@ -4159,6 +4181,43 @@ static void selftest_errors() {
 }
 
 // 展開を外から観察する道具（決定34）。**コンパイラと同じ1段**を見せること。
+// マクロ展開後の位置（11日目の決定52）。§9 の積み残しに対する回帰。
+// **「利用者が書いた行」を指すこと**が満たすべき性質で、展開結果の内部の
+// どこを指すかではない。
+static void selftest_macro_positions() {
+    // 展開結果の内部（生成された lambda の本体）で落ちても、マクロ呼び出しを指す
+    check_eq("macro: deep expansion",
+             eval_error_at("(define-macro (deep x) `(let ((y 1)) (begin (car ,x))))\n"
+                           "(deep 5)\n"), "2:1");
+    // 生成された lambda が後から呼ばれても、コードが書かれた場所を指す
+    check_eq("macro: generated closure",
+             eval_error_at("(define-macro (mk x) `(lambda () (car ,x)))\n"
+                           "(define f (mk 5))\n"
+                           "(f)\n"), "2:11");
+    // 利用者が渡した部分式は**自分の位置を保つ**。マクロ呼び出しには丸めない
+    check_eq("macro: argument keeps its own position",
+             eval_error_at("(define-macro (unless c . body) `(if ,c #f (begin ,@body)))\n"
+                           "(unless #f (car 5))\n"), "2:12");
+    // 生成コードの未束縛参照
+    check_eq("macro: unbound in expansion",
+             eval_error_at("(define-macro (u) `(let ((q 1)) (nosuch q)))\n"
+                           "(u)\n"), "2:1");
+    // 生成コードの構文エラー（コンパイル時）
+    check_eq("macro: bad syntax in expansion",
+             eval_error_at("(define-macro (b) `(let ((a)) a))\n"
+                           "(b)\n"), "2:1");
+    // マクロがマクロを生む場合も同じ
+    check_eq("macro: nested macros",
+             eval_error_at("(define-macro (inner x) `(car ,x))\n"
+                           "(define-macro (outer x) `(let ((q 1)) (inner ,x)))\n"
+                           "(outer 5)\n"), "3:1");
+    // 展開を通らない普通のソースは今までどおり（この修正で変わらないこと）
+    check_eq("plain let is unaffected",
+             eval_error_at("(let ((y 1)) (car 5))\n"), "1:14");
+    check_eq("plain lambda is unaffected",
+             eval_error_at("(define (h) (car 5))\n(h)\n"), "1:13");
+}
+
 static void selftest_macroexpand() {
     check_eq("macroexpand-1 on a special form",
              eval_to_string("(macroexpand-1 '(let ((x 1)) x))"),
@@ -4394,6 +4453,7 @@ int main(int argc, char** argv) {
             selftest_positions();
             selftest_eval();
             selftest_errors();
+            selftest_macro_positions();
             selftest_macroexpand();
             selftest_test_matching();
             std::printf("\n  %d checks, %d failed\n", g_checks, g_failures);
