@@ -39,6 +39,14 @@
 #include <unordered_set>
 #include <vector>
 
+// char-ready? が「いま読んでも待たされないか」を見るためだけに使う
+// （10日目の決定50）。libc の一部であって新しい依存ではない。POSIX 以外
+// （root の Makefile が想定する MinGW）には対応する術がないので、
+// そちらでは常に「読める」と答える。
+#if !defined(_WIN32)
+#include <poll.h>
+#endif
+
 #define GC_NO_INLINE_STD_NEW
 
 #if __has_include(<gc/gc.h>)
@@ -414,15 +422,37 @@ struct SpecialForm : Object {
 // operator new が曖昧になる。ファイナライザは make_port() で明示登録する。
 // 登録を忘れるとディスクリプタが枯渇する（scheme12 の実バグ。§1.6-1）ので、
 // ポートを作る経路は make_port() ただ一つに限ること。
+//
+// 標準ポート（stdin / stdout）だけは FILE* を**所有しない**。所有しない
+// ポートは close() が何もしない（10日目の決定46）。fclose(stdout) を一度でも
+// 許すと、以後の出力がすべて黙って消えるため。
+//
+// 入力は has_peek / peek_ch の1文字先読みを持つ。peek-char と char-ready? が
+// これを使う。**入力は必ず get_char / peek_char / unget_char を通すこと。**
+// std::fgetc を直に呼ぶと先読みの1文字が消える。
 struct Port : Object {
     std::FILE* fp;
     bool is_input;
     bool is_closed;
-    Port(std::FILE* f, bool input)
-        : Object(Tag::Port), fp(f), is_input(input), is_closed(false) {}
+    bool owns_fp;        // 偽なら標準ポート。閉じないしファイナライザも付けない
+    bool has_peek;       // 先読みの1文字を持っているか
+    int  peek_ch;        // has_peek のときだけ意味を持つ。EOF もそのまま入る
+    Port(std::FILE* f, bool input, bool owns)
+        : Object(Tag::Port), fp(f), is_input(input), is_closed(false),
+          owns_fp(owns), has_peek(false), peek_ch(EOF) {}
     void close() {
+        if (!owns_fp) return;
         if (fp && !is_closed) { std::fclose(fp); is_closed = true; fp = nullptr; }
     }
+    int get_char() {
+        if (has_peek) { has_peek = false; return peek_ch; }
+        return std::fgetc(fp);
+    }
+    int peek_char() {
+        if (!has_peek) { peek_ch = std::fgetc(fp); has_peek = true; }
+        return peek_ch;
+    }
+    void unget_char(int c) { peek_ch = c; has_peek = true; }
 };
 
 // --- シングルトン ----------------------------------------------------------
@@ -431,6 +461,11 @@ static ValuePtr g_nil   = nullptr;
 static ValuePtr g_true  = nullptr;
 static ValuePtr g_false = nullptr;
 static ValuePtr g_eof   = nullptr;
+
+// 標準ポート。(current-input-port) / (current-output-port) が返す値そのもの。
+// display などの既定の出力先もここから取る（10日目の決定48）。
+static ValuePtr g_stdin_port  = nullptr;
+static ValuePtr g_stdout_port = nullptr;
 
 // --- 構築 ------------------------------------------------------------------
 
@@ -489,9 +524,14 @@ static void port_finalizer(void* obj, void* /*client_data*/) {
     static_cast<Port*>(obj)->close();
 }
 static ValuePtr make_port(std::FILE* fp, bool is_input) {
-    Port* p = new Port(fp, is_input);
+    Port* p = new Port(fp, is_input, true);
     GC_REGISTER_FINALIZER_IGNORE_SELF(p, port_finalizer, nullptr, nullptr, nullptr);
     return p;
+}
+// 標準ポートは FILE* を所有しないので、閉じるファイナライザを付けない。
+// 経路をここ一つに限るのは make_port と同じ理由（§1.6-1）。
+static ValuePtr make_std_port(std::FILE* fp, bool is_input) {
+    return new Port(fp, is_input, false);
 }
 
 // --- 述語 ------------------------------------------------------------------
@@ -584,6 +624,8 @@ static void value_model_init() {
     g_true  = new Object(Tag::Boolean);
     g_false = new Object(Tag::Boolean);
     g_eof   = new Object(Tag::Eof);
+    g_stdin_port  = make_std_port(stdin,  true);
+    g_stdout_port = make_std_port(stdout, false);
 }
 
 // ===========================================================================
@@ -2776,6 +2818,11 @@ DEFINE_PRED(prim_not,      "not",       is_false(v))
 DEFINE_PRED(prim_procedurep, "procedure?",
             has_tag(v, Tag::Primitive) || has_tag(v, Tag::Closure) ||
             has_tag(v, Tag::Continuation))
+// 閉じたポートもポートである（R5RS）。向きは閉じても変わらない。
+DEFINE_PRED(prim_input_portp,  "input-port?",
+            has_tag(v, Tag::Port) && static_cast<Port*>(v)->is_input)
+DEFINE_PRED(prim_output_portp, "output-port?",
+            has_tag(v, Tag::Port) && !static_cast<Port*>(v)->is_input)
 #undef DEFINE_PRED
 
 // --- 文字列（文字型は無い。文字は長さ1の文字列。§2.2） --------------------
@@ -2981,37 +3028,59 @@ static std::FILE* fopen_with_gc_retry(const char* path, const char* mode) {
     return std::fopen(path, mode);
 }
 
-static std::FILE* out_port_or_stdout(ValuePtr* a, std::size_t n, std::size_t idx,
-                                     const char* who) {
-    if (n <= idx) return stdout;
+// 省略された port 引数は標準ポートで埋める。**stdout を直に書かず、
+// (current-output-port) が返すのと同じ値から取る**（10日目の決定48）。
+static std::FILE* out_port_or_default(ValuePtr* a, std::size_t n, std::size_t idx,
+                                      const char* who) {
+    if (n <= idx) return static_cast<Port*>(g_stdout_port)->fp;
     return port_of(a[idx], who, false)->fp;
 }
+static Port* in_port_or_default(ValuePtr* a, std::size_t n, std::size_t idx,
+                                const char* who) {
+    if (n <= idx) return static_cast<Port*>(g_stdin_port);
+    return port_of(a[idx], who, true);
+}
+
+// 「いま読んでも待たされないか」。R5RS の契約は「TRUE なら次の read-char は
+// 待たない」の一方向だけなので、判断が付かないときは FALSE 側へ倒すのが安全。
+#if defined(_WIN32)
+static bool fp_has_input(std::FILE*) { return true; }
+#else
+static bool fp_has_input(std::FILE* fp) {
+    if (!fp) return false;
+    struct pollfd pfd;
+    pfd.fd      = fileno(fp);
+    pfd.events  = POLLIN;
+    pfd.revents = 0;
+    return ::poll(&pfd, 1, 0) > 0;   // 通常ファイルは常に読める（EOF も「待たない」）
+}
+#endif
 
 static ValuePtr prim_display(ValuePtr* a, std::size_t n) {
     need_args("display", n, 1, 2);
-    std::FILE* out = out_port_or_stdout(a, n, 1, "display");
+    std::FILE* out = out_port_or_default(a, n, 1, "display");
     std::string t = to_display_string(a[0]);
     std::fwrite(t.data(), 1, t.size(), out);
     return a[0];
 }
 static ValuePtr prim_write(ValuePtr* a, std::size_t n) {
     need_args("write", n, 1, 2);
-    std::FILE* out = out_port_or_stdout(a, n, 1, "write");
+    std::FILE* out = out_port_or_default(a, n, 1, "write");
     std::string t = to_string(a[0]);
     std::fwrite(t.data(), 1, t.size(), out);
     return a[0];
 }
 static ValuePtr prim_newline(ValuePtr* a, std::size_t n) {
     need_args("newline", n, 0, 1);
-    std::FILE* out = out_port_or_stdout(a, n, 0, "newline");
+    std::FILE* out = out_port_or_default(a, n, 0, "newline");
     std::fputc('\n', out);
     return g_nil;
 }
 static ValuePtr prim_write_char(ValuePtr* a, std::size_t n) {
-    need_args("write-char", n, 2, 2);
+    need_args("write-char", n, 1, 2);
     GcString& s = str_of(a[0], "write-char");
     if (s.empty()) prim_type_error("write-char", "a character (a string of length 1)", a[0]);
-    std::FILE* out = port_of(a[1], "write-char", false)->fp;
+    std::FILE* out = out_port_or_default(a, n, 1, "write-char");
     std::fputc(s[0], out);
     return a[0];
 }
@@ -3038,22 +3107,35 @@ static ValuePtr prim_close_port(ValuePtr* a, std::size_t n) {
     return g_true;
 }
 static ValuePtr prim_read_char(ValuePtr* a, std::size_t n) {
-    need_args("read-char", n, 1, 1);
-    int c = std::fgetc(port_of(a[0], "read-char", true)->fp);
+    need_args("read-char", n, 0, 1);
+    int c = in_port_or_default(a, n, 0, "read-char")->get_char();
     if (c == EOF) return g_eof;
     char ch = static_cast<char>(c);
     return make_string(std::string_view(&ch, 1));
 }
+static ValuePtr prim_peek_char(ValuePtr* a, std::size_t n) {
+    need_args("peek-char", n, 0, 1);
+    int c = in_port_or_default(a, n, 0, "peek-char")->peek_char();
+    if (c == EOF) return g_eof;
+    char ch = static_cast<char>(c);
+    return make_string(std::string_view(&ch, 1));
+}
+static ValuePtr prim_char_readyp(ValuePtr* a, std::size_t n) {
+    need_args("char-ready?", n, 0, 1);
+    Port* p = in_port_or_default(a, n, 0, "char-ready?");
+    if (p->has_peek) return g_true;             // 先読み済みなら確実に待たない
+    return make_bool(fp_has_input(p->fp));
+}
 static ValuePtr prim_read_line(ValuePtr* a, std::size_t n) {
-    need_args("read-line", n, 1, 1);
-    std::FILE* fp = port_of(a[0], "read-line", true)->fp;
+    need_args("read-line", n, 0, 1);
+    Port* p = in_port_or_default(a, n, 0, "read-line");
     std::string line;
     int c;
-    while ((c = std::fgetc(fp)) != EOF) {
+    while ((c = p->get_char()) != EOF) {
         if (c == '\n') break;
         if (c == '\r') {
-            int next = std::fgetc(fp);
-            if (next != '\n' && next != EOF) std::ungetc(next, fp);
+            int next = p->get_char();
+            if (next != '\n' && next != EOF) p->unget_char(next);
             break;
         }
         line.push_back(static_cast<char>(c));
@@ -3063,12 +3145,12 @@ static ValuePtr prim_read_line(ValuePtr* a, std::size_t n) {
 }
 
 // ポートから S 式を1つ読む。括弧の対応で切り出してからリーダに渡す。
-static ValuePtr read_one_from_port(std::FILE* fp, const char* who) {
+static ValuePtr read_one_from_port(Port* p, const char* who) {
     std::string buf;
     int depth = 0;
     bool in_string = false, in_comment = false, seen = false;
     for (;;) {
-        int c = std::fgetc(fp);
+        int c = p->get_char();
         if (c == EOF) {
             if (!seen) return g_eof;
             break;
@@ -3093,13 +3175,25 @@ static ValuePtr read_one_from_port(std::FILE* fp, const char* who) {
 }
 
 static ValuePtr prim_read_expr(ValuePtr* a, std::size_t n) {
-    need_args("read-expr", n, 1, 1);
-    return read_one_from_port(port_of(a[0], "read-expr", true)->fp, "<read-expr>");
+    need_args("read-expr", n, 0, 1);
+    return read_one_from_port(in_port_or_default(a, n, 0, "read-expr"), "<read-expr>");
 }
 static ValuePtr prim_read_from_stdin(ValuePtr* a, std::size_t n) {
     need_args("read", n, 0, 1);
-    if (n == 1) return read_one_from_port(port_of(a[0], "read", true)->fp, "<read>");
-    return read_one_from_port(stdin, "<stdin>");
+    return read_one_from_port(in_port_or_default(a, n, 0, "read"),
+                              n == 1 ? "<read>" : "<stdin>");
+}
+
+// (current-input-port) / (current-output-port)。R5RS では**手続き**であって
+// 変数ではない。いまはどちらも固定で、with-output-to-file のような
+// 差し替えは無い（10日目の決定46）。
+static ValuePtr prim_current_input_port(ValuePtr*, std::size_t n) {
+    need_args("current-input-port", n, 0, 0);
+    return g_stdin_port;
+}
+static ValuePtr prim_current_output_port(ValuePtr*, std::size_t n) {
+    need_args("current-output-port", n, 0, 0);
+    return g_stdout_port;
 }
 
 // --- その他 ----------------------------------------------------------------
@@ -3400,7 +3494,11 @@ static void init_globals() {
         {"open-output-file", prim_open_output_file},
         {"close-input-port", prim_close_port}, {"close-output-port", prim_close_port},
         {"read", prim_read_from_stdin}, {"read-char", prim_read_char},
+        {"peek-char", prim_peek_char}, {"char-ready?", prim_char_readyp},
         {"read-line", prim_read_line}, {"read-expr", prim_read_expr},
+        {"current-input-port", prim_current_input_port},
+        {"current-output-port", prim_current_output_port},
+        {"input-port?", prim_input_portp}, {"output-port?", prim_output_portp},
         {"load", prim_load},
 
         {"error", prim_raise_error},
@@ -3662,7 +3760,7 @@ static void selftest_display() {
     check_eq("continuation", to_string(new Continuation()), "#<continuation>");
     check_eq("eof", to_string(g_eof), "#<eof>");
 
-    ValuePtr port = make_port(nullptr, true);
+    ValuePtr port = make_port(nullptr, true);   // 所有する（＝閉じられる）ポート
     static_cast<Port*>(port)->is_closed = true;
     check_eq("closed port", to_string(port), "#<closed-port>");
 
@@ -4019,6 +4117,15 @@ static void selftest_errors() {
              eval_error_body("(5 6)"),
              "attempt to call a non-procedure\n  expected: a procedure\n  given: 5");
 
+    // ポート（10日目）。「ポートですらない」と「向きが違う」を区別する
+    check_eq("not a port",
+             eval_error_body("(read-char 5)"),
+             "read-char: wrong type of argument\n  expected: a port\n  given: 5");
+    check_eq("wrong port direction",
+             eval_error_body("(read-char (current-output-port))"),
+             "read-char: wrong type of argument\n"
+             "  expected: an open input port\n  given: #<output-port>");
+
     // Scheme 側から投げる error（決定41）。見出しは呼ぶ側が決め、
     // irritant が given: の詳細行になる
     check_eq("error with one irritant",
@@ -4145,6 +4252,26 @@ static void selftest_eval() {
     check_eq("integer->char",   eval_to_string("(integer->char 65)"),     "\"A\"");
     check_eq("do loop", eval_to_string("(do ((i 0 (+ i 1)) (acc 0 (+ acc i)))"
                                        " ((= i 5) acc))"), "10");
+    // --- ポート（10日目の決定46〜50）---
+    // 標準ポートは**値**として1つずつあり、毎回作り直さない
+    check_eq("current-output-port", eval_to_string("(current-output-port)"), "#<output-port>");
+    check_eq("current-input-port",  eval_to_string("(current-input-port)"),  "#<input-port>");
+    check_eq("std port is one value",
+             eval_to_string("(eq? (current-input-port) (current-input-port))"), "TRUE");
+    // R5RS では変数ではなく手続き
+    check_eq("current-output-port is a procedure",
+             eval_to_string("(procedure? current-output-port)"), "TRUE");
+    check_eq("input-port?",  eval_to_string("(input-port? (current-input-port))"),  "TRUE");
+    check_eq("output-port?", eval_to_string("(output-port? (current-output-port))"), "TRUE");
+    check_eq("port direction",
+             eval_to_string("(output-port? (current-input-port))"), "FALSE");
+    check_eq("non-port", eval_to_string("(input-port? 5)"), "FALSE");
+    // 標準ポートを閉じさせない（決定46）。ここが壊れると以後の printf が
+    // すべて消えるので、この check より後ろの出力が消えること自体が兆候になる
+    check_eq("std port never closes",
+             eval_to_string("(close-output-port (current-output-port))"
+                            "(output-port? (current-output-port))"), "TRUE");
+
     // 長いリストの equal? が C スタックを溢れさせないこと（§5.2）
     check_eq("long equal?",
              eval_to_string("(define (build n acc) (if (= n 0) acc (build (- n 1) (cons n acc))))"

@@ -1,0 +1,43 @@
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+|"|"                                                pass
+!"!"                                                pass
+out                                                pass
+TRUE                                               pass
+FALSE                                              pass
+"abc"                                              pass
+"d"                                                pass
+NIL                                                pass
+(1 "x")                                            pass
+TRUE                                               pass
+TRUE                                               pass
+in                                                 pass
+TRUE                                               pass
+TRUE                                               pass
+"a"                                                pass
+"a"                                                pass
+"a"                                                pass
+TRUE                                               pass
+"b"                                                pass
+"c"                                                pass
+"cd"                                               pass
+(1 "x")                                            pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+
+( total: 40  pass: 40  NG: 0 )
+NIL

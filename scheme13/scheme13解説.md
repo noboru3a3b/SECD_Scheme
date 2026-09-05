@@ -992,15 +992,15 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | 層 | 実体 | 個数 |
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
-| プリミティブ | C++ の関数ポインタ | 100 |
+| プリミティブ | C++ の関数ポインタ | 106 |
 | ライブラリ | Scheme で書かれた定義 | 66（`system_lib.scm` 33 + `lib13.scm` 33） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **194 個**の大域名が起動時に定義される。数え方:
+合計 **200 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 194
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 100
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 200
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 106
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
@@ -1019,7 +1019,7 @@ let  let*  letrec  and  or  cond  case  do  quasiquote
 **値としては特殊形式オブジェクト**として大域に束縛されている。
 `(procedure? call/cc)` が `FALSE` なのはこのため。
 
-### 10.3 プリミティブ（100）
+### 10.3 プリミティブ（106）
 
 ```cpp
 using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
@@ -1036,7 +1036,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | 述語 | `eq?` `eqv?` `equal?` `null?` `pair?` `atom?` `number?` `string?` `symbol?` `vector?` `boolean?` `procedure?` `eof-object?` `not` |
 | 文字列 | `string-length` `string-ref` `string-set!` `make-string` `string-append` `substring` `string=?` `string<?` `string>?` `string<=?` `string>=?` `char->integer` `integer->char` `string->list` `list->string` `symbol->string` `string->symbol` `number->string` `string->number` |
 | ベクタ | `make-vector` `vector` `vector-length` `vector-ref` `vector-set!` `vector->list` `list->vector` |
-| 入出力 | `display` `write` `newline` `write_newline` `write-char` `open-input-file` `open-output-file` `close-input-port` `close-output-port` `read` `read-char` `read-line` `read-expr` `load` |
+| 入出力 | `display` `write` `newline` `write_newline` `write-char` `open-input-file` `open-output-file` `close-input-port` `close-output-port` `read` `read-char` `peek-char` `char-ready?` `read-line` `read-expr` `current-input-port` `current-output-port` `input-port?` `output-port?` `load` |
 | その他 | `error` `gensym` `random` `random-seed` `gc-collect` `gc-heap-size` `gc-free-bytes` |
 | テスト機構 | `test-start` `test-end` |
 | デバッグ | `compile` `disassemble` `trace-on` `trace-off` `globals` `macros` `help` `macroexpand-1` `macroexpand` |
@@ -1151,6 +1151,77 @@ scheme13: warning: system_lib.scm not found; the shared library
 (define t (rb-empty))
 (set! t (rb-insert t 5 'five))
 (rb-lookup t 5)
+```
+
+### 10.9 ポート
+
+ポートは `Port` オブジェクト1種類で、`FILE*` と向き（入力か出力か）を持つ。
+`open-input-file` / `open-output-file` が作り、`close-input-port` /
+`close-output-port` が閉じる。閉じたポートは `#<closed-port>` と表示される
+（第2.3節）。**閉じてもポートであることと向きは変わらない**ので、
+`(input-port? p)` は閉じたあとも真を返す（R5RS）。
+
+**確保の経路は `make_port` / `make_std_port` の2つに限る。** ファイルを
+開くポートには必ずファイナライザを登録する。登録を忘れるとディスクリプタが
+枯渇する（scheme12 の実バグ。第1.6節）。開くときは `EMFILE` / `ENFILE` を
+見て、`GC_gcollect()` に加えて **`GC_invoke_finalizers()` まで呼んでから**
+1回だけやり直す。前者だけではファイナライザがキューに積まれるだけで、
+まだ閉じられていない。
+
+#### 標準ポート
+
+`stdin` と `stdout` は**値として1つずつ**あり、`(current-input-port)` /
+`(current-output-port)` がそれを返す。R5RS では**変数ではなく手続き**なので、
+`(procedure? current-output-port)` は `TRUE`。
+
+```scheme
+(current-output-port)                 ; => #<output-port>
+(eq? (current-output-port) (current-output-port))   ; => TRUE
+(output-port? (current-output-port))  ; => TRUE
+(input-port? (current-output-port))   ; => FALSE
+```
+
+`display` / `write` / `newline` / `write-char` は port 引数を省くと、
+この値の `FILE*` へ書く。**`stdout` を直に書く場所はもう無い。**
+`read-char` / `peek-char` / `char-ready?` / `read-line` / `read` /
+`read-expr` も同様に、省けば `(current-input-port)` から読む。
+
+標準ポートは `FILE*` を**所有しない**（`owns_fp` が偽）。所有しない
+ポートは `close()` が何もしないので、`(close-output-port (current-output-port))`
+は真を返すが実際には閉じない。`fclose(stdout)` を一度でも許すと、
+以後の出力がすべて黙って消えるためである。ファイナライザも登録しない。
+
+いまのところ差し替えの仕組みは無い（`with-output-to-file` は未実装）。
+入れるとすれば `g_stdout_port` を差し替えるだけで済むように、既定の
+出力先はすべてこの値を経由させてある。
+
+#### 先読みと char-ready?
+
+`Port` は1文字の先読み（`has_peek` / `peek_ch`）を持つ。`peek-char` は
+1文字読んでここに置き、`read-char` は先に取り出す。**入力は必ず
+`get_char` / `peek_char` / `unget_char` を通すこと。** `std::fgetc` を
+直に呼ぶと先読みの1文字が消える。`read-line` と `read` も通している。
+
+```scheme
+(define in (open-input-file "x.txt"))   ; 中身は abc
+(peek-char in)   ; => "a"
+(peek-char in)   ; => "a"   消費しない
+(read-char in)   ; => "a"
+(read-char in)   ; => "b"
+```
+
+`char-ready?` は「いま読んでも待たされないか」を答える。R5RS の契約は
+**「真なら次の `read-char` は待たない」の一方向だけ**なので、判断が付かない
+ときは偽へ倒すのが安全である。
+
+- 先読みを持っていれば無条件に真
+- そうでなければ POSIX の `poll(2)` をタイムアウト 0 で引く。通常ファイルは
+  常に読めるので真（EOF も「待たない」ので真）
+- `_WIN32` では対応する術がないので常に真を返す
+
+```scheme
+(char-ready? (current-input-port))
+;  端末で入力待ちなら FALSE、パイプにデータが来ていれば TRUE
 ```
 
 ---
@@ -1270,7 +1341,7 @@ make -C scheme13 test       #  16 passed — 既存 .scm 資産との互換性�
 make -C scheme13 bench      # 呼び出し性能
 ```
 
-### 12.1 --selftest（150項目）
+### 12.1 --selftest（161項目）
 
 処理系を C++ 単体で検査する。**起動時ライブラリを読む前に走る**ので、
 ここで見られるのは処理系そのものだけである。
@@ -1286,19 +1357,20 @@ make -C scheme13 bench      # 呼び出し性能
 | `selftest_macroexpand` | 展開の観察 |
 | `selftest_test_matching` | テスト機構の照合規則 |
 
-### 12.2 ゴールデン（13件）+ 起動時ライブラリ（3件）
+### 12.2 ゴールデン（14件）+ 起動時ライブラリ（3件）
 
 既存 `.scm` 資産を走らせ、**出力全体をバイト単位で**ゴールデンと比べる。
 これが「既存 `.scm` を無修正で動かす」の唯一の判定基準である。
 
-ゴールデンは scheme12 の出力である。ただし2件だけ例外がある。
+ゴールデンは scheme12 の出力である。ただし3件だけ例外がある。
 
 | ファイル | 例外の理由 |
 | --- | --- |
 | `test-case6.scm` | scheme13 でテスト機構を復活させたため、出力そのものが別物 |
 | `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト。scheme12 に比べる相手が無い |
+| `scheme13/tests/port_test.scm` | 同上（ポート。第10.9節） |
 
-加えて **cwd を変えて起動する回帰が3件**入っている（合計 16 件）。
+加えて **cwd を変えて起動する回帰が3件**入っている（合計 17 件）。
 ゴールデンは全部リポジトリのルートから走るので、これが無いと
 ライブラリ探索の壊れ方に気づけない（第10.7節）。
 
@@ -1368,7 +1440,7 @@ scheme12 に渡しているので、**`NIL` / `TRUE` / `FALSE` という名前�
 | 大域名 | **差ゼロ**（scheme12 の 156 個すべてあり） | `(globals)` の集合を `comm` |
 | 既存 `.scm` 資産の出力 | **11/12 がバイト単位で一致** | ゴールデン |
 | 構文・マクロ展開 | 15件一致 | `make compare` |
-| 凍結仕様 §2 | 150項目で固定 | `make selftest` |
+| 凍結仕様 §2 | 161項目で固定 | `make selftest` |
 
 名前の集合を測る手順（主張するなら必ずこれで測ること。
 `dev_memo.md` 決定40）:
@@ -1395,7 +1467,7 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 しまい、**どちらにしても scheme12 とは違う結果になる。** それなら §2.2 の
 凍結仕様「`eq?` は数値を値比較」と揃えるほうが筋が通る。
 
-影響範囲: `case` は `memv` に展開されるので無影響。ゴールデン16件にも無影響。
+影響範囲: `case` は `memv` に展開されるので無影響。ゴールデン17件にも無影響。
 
 **2. エラーメッセージの文面。** 第3章の形に全面的に書き直した。
 **正常に走るプログラムの出力には影響しない。**
@@ -1404,15 +1476,21 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 ### 13.3 上位互換であること
 
-scheme13 は **194 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **200 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
-差分の 38 個: `lib13.scm` の 33 個 + `error` + `macroexpand-1` +
-`macroexpand` + `test-start` + `test-end`。
+差分の 44 個: `lib13.scm` の 33 個 + `error` + `macroexpand-1` +
+`macroexpand` + `test-start` + `test-end` + ポートの 6 個
+（`current-input-port` `current-output-port` `input-port?` `output-port?`
+`peek-char` `char-ready?`）。
+
+port 引数を**省けるようになった**手続きもある（`write-char` `read-char`
+`read-line` `read` `read-expr`）。scheme12 は必ずポートを要求した。
+引数を増やす方向ではないので、既存のコードは影響を受けない。
 
 ### 13.4 証拠の範囲
 
-一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 150 項目**で、
+一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 161 項目**で、
 証明ではない。とくに、**既存資産はどれもエラーを踏まずに走りきる**ので、
 ゴールデンが押さえているのは「正常に走るプログラムの出力」だけである。
 エラー経路の互換性は測っていない（意図的に変えたので、測る意味も薄い）。
@@ -1432,19 +1510,21 @@ scheme13 で動くが、**逆は動かない場合がある**。
 
 ## 14. 既知の制限と拡張ポイント
 
-### 14.1 R5RS で未実装のもの（8つ）
+### 14.1 R5RS で未実装のもの（2つ）
 
-40件あった不足を 8 件まで縮めた。残りは**どれも C++ 側の作業が要る。**
+40件あった不足を 8 件（8日目、`lib13.scm`）、さらに **2 件**（10日目、ポート）まで
+縮めた。残りは2つとも VM か継続に手が要る。
 
 | 名前 | なぜ Scheme で書けないか | 重さ |
 | --- | --- | --- |
-| `input-port?` `output-port?` | ポートの向きを Scheme から見る術が無い | 軽 |
-| `current-input-port` `current-output-port` | stdin/stdout の**ポート値**が存在しない（`display` は引数省略時に stdout へ書くだけ） | 軽 |
-| `peek-char` `char-ready?` | ポートの先読みバッファが要る | 中 |
-| `values` | 多値。VM が返り値を複数運ぶ必要がある | 重 |
+| `values` `call-with-values` | 多値。VM が返り値を複数運ぶ必要がある | 重 |
 | `dynamic-wind` | 継続の出入りにフックが要る。§2.7 の「トップレベルを跨ぐ継続」との噛み合わせも要検討 | 重 |
 
 **どれも「無くて困った」という報告は来ていない。**
+
+`with-input-from-file` / `with-output-to-file` も無い。こちらは標準ポートを
+差し替えれば書けるが、動的な差し替えは継続との噛み合わせが要るので保留
+（第10.9節）。
 
 ### 14.2 設計として入れないもの
 
@@ -1666,7 +1746,17 @@ Fatal error: t.scm:1:1: length: wrong type of argument
   given: (1 . 2)
     (length (cons 1 2))
     ^
+
+Fatal error: t.scm:1:1: read-char: wrong type of argument
+  expected: an open input port
+  given: #<output-port>
+    (read-char (current-output-port))
+    ^
 ```
+
+ポートは「ポートですらない」と「向きが違う（あるいは閉じている）」を
+言い分ける。前者は `expected: a port`、後者は `expected: an open input port`
+（第10.9節）。
 
 ### C.2 引数の数が違う
 
@@ -1812,9 +1902,9 @@ clang++ -std=c++17 -Wall -Wextra -O2 -Wno-unused-function \
 | ターゲット | 内容 |
 | --- | --- |
 | `all` | ビルド |
-| `selftest` | 凍結仕様との突き合わせ（150項目） |
+| `selftest` | 凍結仕様との突き合わせ（161項目） |
 | `compare` | 構文展開が scheme12 と等価か（15件） |
-| `test` | 既存 `.scm` 資産との互換性回帰（16件）← **受け入れ基準** |
+| `test` | 既存 `.scm` 資産との互換性回帰（17件）← **受け入れ基準** |
 | `bench` | 呼び出し性能 |
 | `clean` | 生成物を削除 |
 | `help` | ターゲット一覧 |

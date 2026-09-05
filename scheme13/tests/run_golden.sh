@@ -41,7 +41,7 @@ trap 'rm -f "$tmp"' EXIT
 # scheme13 が自分で持つテスト。上の FILES と違い、これは scheme12 の出力では
 # なく scheme13 の出力をゴールデンにしてある（scheme12 には lib13.scm が
 # 無いので比べる相手が存在しない）。**./scheme12_debug を渡すと落ちる。**
-OWN_TESTS="scheme13/tests/lib13_test.scm"
+OWN_TESTS="scheme13/tests/lib13_test.scm scheme13/tests/port_test.scm"
 
 run_one() {
     f=$1
@@ -92,8 +92,8 @@ for dir in "$ROOT" "$ROOT/scheme13" "$ROOT/scheme13/tests"; do
 done
 rm -f "$probe"
 
-# test_improvements.scm が消し損ねる一時ファイル
-rm -f test-eof-temp.txt
+# test_improvements.scm と port_test.scm が置いていく一時ファイル
+rm -f test-eof-temp.txt test-port-temp.txt
 
 echo
 echo "  $pass passed, $fail failed"

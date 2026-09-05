@@ -490,8 +490,14 @@ struct Template { GcVec<GcString> params; std::optional<GcString> rest;
 ./scheme13/tests/run_golden.sh ./scheme13/scheme13
 ```
 
-が `12 passed, 0 failed` になること。ゴールデンは scheme12（`88db98b`）の
+が既存資産12件について `PASS` になること。ゴールデンは scheme12（`88db98b`）の
 出力で、`scheme13/tests/golden/` に格納済み。**バイト単位で一致**が条件。
+
+> **注記（10日目）**: `run_golden.sh` の合計件数はこの12件ではない。
+> 7日目に起動時ライブラリの探索3件、8日目に `lib13_test.scm`、
+> 10日目に `port_test.scm` が加わり、いまは **17 passed** と出る。
+> **受け入れ基準はあくまで既存資産12件のバイト一致**で、残りは
+> scheme13 自身のテストである。この節の12件は増やさない。
 
 対象: `system_lib.scm` `mlib7.scm` `hashtable_lib.scm` `rbtree_lib_improved.scm`
 `list_test1.scm` `test_fixes.scm` `test_improvements.scm` `test_vector_env.scm`
@@ -1205,6 +1211,91 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
 - 大域名は **156個（scheme12）→ 194個**。差分は 7日目の4個 + `error` +
   lib13.scm の33個。
 
+### 2026-09-04（10日目）— 標準ポートと先読み
+
+§8 の4番目のうち「比較的軽い」と見積もっていたポート系に、利用者の指示で着手。
+**残り8件のうち6件が入り、R5RS の不足は 2 件になった。**
+
+46. **標準ポートは「値」として1つずつ持ち、閉じさせない。**
+    - `stdin` / `stdout` に対応する `Port` を1つずつ作り、`g_stdin_port` /
+      `g_stdout_port` に置く。`(current-input-port)` / `(current-output-port)`
+      はこれを返す。**R5RS では変数ではなく手続き**なので、プリミティブにした
+      （`(procedure? current-output-port)` は `TRUE`）
+    - `Port` に `owns_fp` を足した。**標準ポートは `FILE*` を所有しない。**
+      所有しないポートは `close()` が何もせず、ファイナライザも登録しない
+    - **理由: `fclose(stdout)` を一度でも許すと、以後の出力がすべて黙って
+      消える。** `(close-output-port (current-output-port))` は真を返すが
+      実際には閉じない。R5RS は閉じたポートへの書き込みを未定義としており、
+      「閉じさせない」と決めるほうが事故が軽い
+    - 却下案: 閉じさせた上で `is_closed` を立てる。以後の `display` が
+      `#<closed-port>` へ書こうとして落ちる。処理系が黙って口を失う設計は採らない
+
+47. **表示は増やさない。** 標準ポートも `#<input-port>` / `#<output-port>`。
+    §2.1（凍結仕様）に行を足さない。区別が要る場面が現れてから考える。
+
+48. **既定の出力先は `g_stdout_port` を経由する。** `out_port_or_stdout` を
+    `out_port_or_default` に改め、`stdout` を直に書く場所をソースから消した。
+    入力側は `in_port_or_default`。
+    - **これは将来のためでもある。** `with-output-to-file` のような差し替えを
+      入れるなら、`g_stdout_port` を差し替えるだけで済む形にしてある
+      （入れるとは決めていない。§9 を見ること）
+
+49. **R5RS が省略可能としている port 引数は省略可能にする。**
+    `write-char` / `read-char` / `read-line` / `read` / `read-expr`。
+    - 引数を**広げる**だけなので既存資産は影響を受けない（ゴールデンで実測）
+    - `read-line` は R5RS に無い scheme12 の拡張だが、ここだけポート必須だと
+      使う側が転ぶので揃えた。**これは「R5RS にあって無いもの」という
+      決定42 の基準の外側**なので、明記しておく
+
+50. **先読みは `Port` が1文字だけ持つ（`ungetc` を使わない）。**
+    - `has_peek` / `peek_ch` と `get_char` / `peek_char` / `unget_char`。
+      **入力は必ずこの3つを通すこと。** `std::fgetc` を直に呼ぶと先読みが消える。
+      `read-line` と `read_one_from_port` も通すように書き換えた
+    - 却下案: `std::ungetc`。1文字なら動くが、`char-ready?` が
+      「先読みを持っているか」を知る術が無くなる。`FILE*` の内部は覗けない
+    - **`char-ready?` は POSIX の `poll(2)` をタイムアウト0で引く。**
+      R5RS の契約は「真なら次の `read-char` は待たない」の**一方向だけ**なので、
+      分からないときは偽へ倒すのが安全。先読みを持っていれば無条件に真。
+      通常ファイルは常に真（EOF も「待たない」ので真）
+    - `_WIN32` では常に真を返す。ルートの `Makefile` が MinGW を想定して
+      いるので `<poll.h>` を無条件に include できない。**`poll` は libc の
+      一部であって §1.2 の「依存を増やさない」には触れない**
+
+51. **ポートのテストは `tests/port_test.scm`（40項目）でゴールデンに載せる。**
+    - `lib13_test.scm` と同じく scheme13 自身のテスト。原典のテスト機構を使う
+    - **`#<eof>` や `#<output-port>` は期待値に書けない。** §2.1 の注記のとおり
+      表示は読み戻せないので、`(eof-object? (peek-char in))` のように述語で
+      確かめる。表示そのものは `--selftest` が押さえている
+    - ファイルを開いて書いて読み戻すところまでやる。一時ファイル
+      `test-port-temp.txt` は `run_golden.sh` が消す
+
+**この日やったこと**
+
+- セクション1 に `<poll.h>`（`_WIN32` では include しない）
+- セクション3 の `Port` に `owns_fp` / `has_peek` / `peek_ch` と
+  `get_char` / `peek_char` / `unget_char`、`make_std_port()`、
+  `g_stdin_port` / `g_stdout_port`
+- セクション11 に `current-input-port` / `current-output-port` /
+  `input-port?` / `output-port?` / `peek-char` / `char-ready?`
+  （プリミティブは **100 → 106個**）。`out_port_or_default` /
+  `in_port_or_default` / `fp_has_input`
+- `--selftest` にポート9項目とエラー2項目（150 → **161 checks**）
+- `scheme13/tests/port_test.scm`（40項目）を新設し、`run_golden.sh` の
+  `OWN_TESTS` に追加（16 → **17件**）
+- `scheme13解説.md` に **第10.9節「ポート」**を新設。数（106 / 200）、
+  第12章のテスト数、第13.3節の差分、第14.1節（8つ → **2つ**）、付録C を更新
+
+**分かったこと**
+
+- **R5RS の不足は 8件 → 2件。** 残るのは `values`（＋`call-with-values`）と
+  `dynamic-wind` で、どちらも VM か継続に手が要る。
+- 大域名は **194 → 200個**。`comm` での実測（決定40）で scheme12 の 156個は
+  全部あり、差はゼロのまま。
+- **ゴールデン12件は今回も1バイトも変わらなかった。** 既存資産はポートを
+  必ず明示して渡しており、引数を広げる変更は届かない。
+- `char-ready?` は実測で確かめた。`{ sleep 1; printf 'xyz'; } | scheme13` の
+  ときだけ `FALSE`、パイプにデータがあるときと EOF のときは `TRUE`。
+
 ---
 
 ## 7. 現在の状態
@@ -1224,26 +1315,28 @@ make -C scheme13 test       #  12 passed, 0 failed  ← §5.1 の受け入れ基
   | 9 命令セット | ✅ 逆アセンブル込み（**ファイル上は 8 より前**。決定24） |
   | 8 コンパイラ | ✅ |
   | 10 VM | ✅ |
-  | 11 プリミティブ | ✅ **100個**（＋特殊形式19個、＋`system_lib.scm` の38個、＋`lib13.scm` の33個 = **大域名194個**）。**scheme12（156個）との差は実測ゼロ**（測り方は決定40） |
+  | 11 プリミティブ | ✅ **106個**（＋特殊形式19個、＋`system_lib.scm` の33個、＋`lib13.scm` の33個、＋定数9個 = **大域名200個**）。**scheme12（156個）との差は実測ゼロ**（測り方は決定40） |
   | 12 起動 | ✅ REPL / `--load` / `--selftest` / `--read` / `--expand` |
 - `scheme13/lib13.scm` — ✅ R5RS の不足33個（決定42）。起動時に
   `system_lib.scm` の**後**で読む。既存資産は先に読まれるほうが勝つので無傷
 - `scheme13/Makefile` — ✅（`all` / `selftest` / `compare` / `test` / `bench` / `clean`）
-- `scheme13/tests/` — ✅ ゴールデン13件（うち `lib13_test.scm` は scheme13 自身の
-  75項目テスト）+ 起動時ライブラリ3件 + 展開の等価性検証 + README
-- `scheme13/scheme13解説.md` — ✅ 実装の解説（1875行。14章 + 付録4本）。
+- `scheme13/tests/` — ✅ ゴールデン14件（うち `lib13_test.scm` の75項目と
+  `port_test.scm` の40項目は scheme13 自身のテスト）+ 起動時ライブラリ3件 +
+  展開の等価性検証 + README
+- `scheme13/scheme13解説.md` — ✅ 実装の解説（14章 + 付録4本）。
   **処理系の振る舞いを変えたらここも直す。** ずれやすいのは
-  第7章（命令一覧）・第10章（プリミティブ一覧）・第13章（互換性）・付録C
+  第7章（命令一覧）・第10章（プリミティブ一覧と数）・第12章（テストの件数）・
+  第13章（互換性）・第14.1節（R5RS の不足）・付録C
 - `scheme13/dev_memo.md` / `micro_scheme8_notes.md` — ✅
 - 開発環境 — SBCL 2.6.0 導入済み（原典を動かして参照できる）
 
 いま走るテスト:
 
 ```sh
-make -C scheme13 selftest     # 150 checks, 0 failed（セクション 3〜11 の回帰）
+make -C scheme13 selftest     # 161 checks, 0 failed（セクション 3〜11 の回帰）
 make -C scheme13 compare      #  15 passed, 0 failed（展開が scheme12 と等価）
-make -C scheme13 test         #  16 passed, 0 failed  ← 受け入れ基準
-                              #  （ゴールデン13件 + 起動時ライブラリ3件）
+make -C scheme13 test         #  17 passed, 0 failed  ← 受け入れ基準
+                              #  （ゴールデン14件 + 起動時ライブラリ3件）
 make -C scheme13 bench        # 100万回で約 0.12 秒（scheme12 は約 3.3 秒）
 ```
 
@@ -1288,18 +1381,18 @@ scheme12（`scheme12_bignum_boost_debug.cpp`）には**まだ触れていない*
    - マクロ展開のメモ化（原典がやっている。`micro_scheme8_notes.md` §3.6）
    - `LD` の環境たどりを、深さ0の場合に特化する
 
-4. **残り8つの R5RS 名を入れるか、利用者と決める。** 8日目に 40件 → 8件まで
-   縮めたが、残りはどれも C++ 側の作業が要る（一覧は8日目の「分かったこと」）。
-   重さの順に:
-   - `input-port?` / `output-port?` / `current-input-port` /
-     `current-output-port` — **比較的軽い。** stdin/stdout の `Port` 値を
-     グローバルに1つずつ持ち、`display` などの既定値をそれにすればよい
-   - `peek-char` / `char-ready?` — `Port` に1文字の先読みバッファを足す
-   - `values` — 多値。VM が返り値を複数運ぶ必要がある。**重い**
-   - `dynamic-wind` — 継続の出入りにフック。**重い**、かつ §2.7 の
+4. **残り2つの R5RS 名を入れるか、利用者と決める。** 8日目に 40件 → 8件、
+   10日目に **8件 → 2件**まで縮めた。残る2つはどちらも重い。
+   - `values` / `call-with-values` — 多値。VM が返り値を複数運ぶ必要がある。
+     `RTN` と `APP` の両方に手が入る
+   - `dynamic-wind` — 継続の出入りにフック。かつ §2.7 の
      「トップレベルのフォームを跨ぐ継続」の扱いと噛み合うか要検討
 
-   **どれも「無くて困った」という報告は来ていない。** 急がないこと。
+   **どちらも「無くて困った」という報告は来ていない。** 急がないこと。
+   R5RS 外だが、`with-input-from-file` / `with-output-to-file` も無い。
+   決定48 で `g_stdout_port` 経由に揃えてあるので差し替え自体は書けるが、
+   継続で外へ跳んだときに戻す責任が `dynamic-wind` と同じ形になる。
+   **`dynamic-wind` と一緒に決めること。**
 
 5. **エラーの回帰をゴールデン側でも見るか。** 7日目に分かったとおり、既存の
    .scm 資産はエラーを踏まないので、ゴールデン12件はエラーの文面を1つも
@@ -1326,6 +1419,12 @@ scheme12（`scheme12_bignum_boost_debug.cpp`）には**まだ触れていない*
 
 - ~~**環境フレームの表現**~~ → 4日目の決定17（§4.4.2）で解決、5日目に実装。
   フレームの連結リスト `Env*`、可変長末尾配列で1フレーム=1確保。
+
+- **標準ポートの差し替え**（10日目の決定46・48 の帰結）。いま
+  `(current-output-port)` は固定で、`with-output-to-file` のような動的な
+  差し替えが無い。既定の出力先はすべて `g_stdout_port` を経由しているので
+  差し替え自体は1箇所で済むが、**継続で外へ跳んだときに元へ戻す責任**が
+  残る。これは `dynamic-wind` と同じ問題なので、**別々に決めない**こと。
 
 - **マクロ展開後の位置情報**。構文展開については 4日目の決定21 で最小限の答えを
   出した（出力の先頭ペアに元フォームの位置を貼る）。残るのは

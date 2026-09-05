@@ -6,6 +6,18 @@
 
 **`test-case6.scm` の 1 件だけは scheme13 の出力で採り直してある。**
 
+残る2件（`lib13_test.scm` / `port_test.scm`）は**既存資産ではなく scheme13
+自身のテスト**で、scheme12 には比べる相手が存在しない。こちらも scheme13 の
+出力をゴールデンにしてある。**`./scheme12_debug` を渡すとこの3件が落ちる。
+それは正常。**
+
+| 種類 | 件数 | ゴールデンの出どころ |
+| --- | --- | --- |
+| 既存 `.scm` 資産 | 11 | scheme12（`88db98b`） |
+| `test-case6.scm` | 1 | scheme13（理由は下記） |
+| `lib13_test.scm`（R5RS の補い。8日目） | 1 | scheme13 |
+| `port_test.scm`（ポート。10日目） | 1 | scheme13 |
+
 ## なぜこの 1 件だけ別扱いなのか
 
 このファイルは**原典 `micro_Scheme8.lisp` のテストスイート**で、式とその期待値が
