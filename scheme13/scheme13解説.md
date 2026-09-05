@@ -1,8 +1,8 @@
-# scheme13 解説文書（v1.0）
+# scheme13 解説文書（v1.1）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
-対象は `scheme13/scheme13.cpp`（単一ファイル、4,308 行）と
-`scheme13/lib13.scm`（191 行）。
+対象は `scheme13/scheme13.cpp`（単一ファイル、4,674 行）と
+`scheme13/lib13.scm`（221 行）。
 
 `scheme12_debug`（`scheme12_bignum_boost_debug.cpp`）を、一貫した設計思想の
 もとで書き直したものである。**振る舞いは互換、設計は選び直した。**
@@ -24,8 +24,15 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 「何を却下したか」が残っている。本文でも要所で決定番号を示す。
 
 **この文書は実装に追随させる。** 処理系の振る舞いを変えたら、ここも直すこと。
-とくにずれやすいのは第7章（命令一覧）、第10章（プリミティブ一覧）、
-第13章（互換性）、付録C（エラー一覧）である。
+とくにずれやすいのは第7章（命令一覧）、第10章（プリミティブ一覧と個数）、
+第12章（テストの件数）、第13章（互換性）、付録C（エラー一覧）である。
+
+追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
+出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
+
+> **v1.1 で追ったもの**: ポートと標準ポート（第10.9節）、多値と `dynamic-wind`
+> （第10.10節・第8.3節）、`let` がクロージャを確保しないこと（第7.3節）、
+> マクロ展開後のエラー位置（第3.1節）、性能の実測（第8.4節・第14.5節）。
 
 ---
 
@@ -506,8 +513,9 @@ scheme12 はアクセサが `expected pair` を返していて、利用者の型
 
 エラーの位置は**利用者が書いた行**を指す（`dev_memo.md` 決定43）。
 
-素直に「いま実行中の命令」を指すと、`(sqrt -4)` が `lib13.scm` の 107 行目を
-指してしまう。**利用者はその行を書いていないので直しようがない。**
+素直に「いま実行中の命令」を指すと、`(sqrt -4)` が `lib13.scm` の中
+（`sqrt` が `error` を呼んでいる行）を指してしまう。
+**利用者はその行を書いていないので直しようがない。**
 
 `SourceFile` に `is_library` を持たせて起動時ライブラリに印を付け、
 位置を埋めるときに実行中の命令がライブラリの中なら、ダンプを内側から外へ
@@ -1264,6 +1272,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | リスト | `list-tail` `list-ref` `member` `assoc` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
 | 多値・動的拡張 | `call-with-values` `dynamic-wind` |
+| 内部ヘルパ | `list-tail-checked` |
 
 凍結仕様に合わせた判断:
 
@@ -1276,6 +1285,15 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 - `floor` / `ceiling` / `truncate` / `round` は整数では恒等。名前を
   受け付けること自体に意味がある（他所のコードがそのまま動く）
 - `string` は文字が長さ1の文字列なので `string-append` そのもの
+
+`list-tail-checked` は `list-tail` と `list-ref` が共有する内部ヘルパで、
+利用者が呼ぶものではない。**報告する添字は元の `k`** でなければならず
+（内側で減った途中の値を出すと利用者が渡していない数が `given:` に出る）、
+**見出しの名前も呼んだ側のもの**でなければならない（`list-ref` から来たときに
+`list-tail` と名乗らない）。その2つを一箇所に閉じ込めるために切り出してある。
+
+> この名前だけ、決定60 の「内部名には `%` を付ける」に従っていない。
+> 8日目に置いたもので、規約は13日目に決めたためである。
 
 ### 10.7 ライブラリの探索
 
@@ -1955,6 +1973,54 @@ scheme13> (add5 10)
 この値（3）は scheme12 でも実測して同じであることを確認してあり、
 `--selftest` の `"call/cc across top-level forms"` で固定してある。
 
+### B.4 dynamic-wind を跨いだ脱出
+
+継続で外へ跳ぶと、**内側の `after` から順に**走る（第8.3節）。実機の出力:
+
+```scheme
+(define path '())
+(define (add s) (set! path (cons s path)))
+
+(display
+ (call/cc (lambda (esc)
+   (dynamic-wind (lambda () (add 'a-in))
+     (lambda () (dynamic-wind (lambda () (add 'b-in))
+                              (lambda () (esc 'escaped))
+                              (lambda () (add 'b-out))))
+     (lambda () (add 'a-out))))))
+(newline)
+(display (reverse path))
+;  escaped
+;  (a-in b-in b-out a-out)
+```
+
+### B.5 R5RS 6.4 の例（再入つき）
+
+**脱出だけでなく再入も動く。** R5RS の原文にある例を、そのまま:
+
+```scheme
+(let ((path '()) (c #f))
+  (let ((add (lambda (s) (set! path (cons s path)))))
+    (dynamic-wind
+      (lambda () (add 'connect))
+      (lambda ()
+        (add (call-with-current-continuation
+              (lambda (c0) (set! c c0) 'talk1))))
+      (lambda () (add 'disconnect)))
+    (if (< (length path) 4)
+        (c 'talk2)
+        (reverse path))))
+;  (connect talk1 disconnect connect talk2 disconnect)
+```
+
+`(c 'talk2)` が `dynamic-wind` の**中へ**跳び戻るので、`connect` が
+もう一度走ってから `talk2` が積まれ、最後に `disconnect` で抜ける。
+
+**継続を使う例は1つのトップレベルのフォームに閉じて書くこと。**
+フォームを跨ぐと B.3 の癖が効いてしまう。この例が `let` で全体を包んで
+いるのはそのためで、R5RS の原文もそう書かれている。
+`tests/lib13_test.scm` に同じものが入っている。
+
 ---
 
 ## 付録C. エラーメッセージ一覧
@@ -2173,6 +2239,7 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
         ├── run_golden.sh       ゴールデン比較
         ├── compare_expand.sh   展開の等価性
         ├── lib13_test.scm      lib13.scm の 102 項目テスト
+        ├── port_test.scm       ポートの 40 項目テスト
         └── golden/             期待される出力
 ```
 
@@ -2184,10 +2251,17 @@ scheme13 は scheme12 と**同じ振る舞いを、選び直した設計で**実
 Scheme 処理系である。
 
 - 既存 `.scm` 資産はゴールデンで**バイト単位で一致**する（受け入れ基準）
-- 大域名は scheme12 の 156 個をすべて含み、38 個多い上位互換
-- 呼び出し性能は**約 27 倍**
-- エラーは位置・見出し・`expected:`/`given:` の一つの形に揃っている
+- 大域名は scheme12 の 156 個をすべて含み、**50 個多い上位互換**（206 個）
+- **R5RS の不足はゼロ。** 8日目に数え上げた 40 件を、`lib13.scm`（8日目）、
+  ポート（10日目）、多値と `dynamic-wind`（13日目）で埋めた
+- 呼び出し性能は**約 27 倍**。実ワークロード（赤黒木）は 12日目に
+  さらに **-23%**（`let` がクロージャを確保しなくなった）
+- エラーは位置・見出し・`expected:`/`given:` の一つの形に揃っている。
+  **マクロ展開の中で落ちても、利用者が書いた行を指す**
 - 逆アセンブル・トレース・マクロ展開の観察が一級市民として揃っている
+
+数字はすべて実機から採ってある。確かめ方は第10.1節（名前と個数）、
+第8.4節（性能と命令の実行回数）、第12章（テスト）にコマンドで書いた。
 
 **手を入れるときは `dev_memo.md` の §1 設計憲章と §2 凍結仕様を先に読み、
 §6 決定ログに理由を残すこと。** そして `selftest` / `compare` / `test` の
