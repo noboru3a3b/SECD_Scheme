@@ -16,6 +16,10 @@
 ;;;
 ;;; 引数の誤りは `error` で §4.2 の形に揃えて報告する。見出しは
 ;;; 「<誰が>: <何がまずいか>」、値は irritant にして `given:` に出す。
+;;;
+;;; **`%` で始まる名前は内部用**（決定60）。このファイルが使うためだけの口で、
+;;; 利用者が呼ぶものではない。ここで定義する %list-tail-checked のほか、
+;;; C++ 側の %values->list / %wind-push / %wind-pop を使っている。
 
 ;;; ---------------------------------------------------------------- 数
 ;;; 整数しか無いので、R5RS の数値塔の述語はすべて「整数かどうか」に潰れる。
@@ -127,7 +131,7 @@
 ;; ならない。減った途中の値を出すと、利用者が渡していない数が given: に出る。
 ;; who を引数に取るのも同じ理由で、list-ref から来たときに list-tail の
 ;; 名前を出さないため。
-(define list-tail-checked
+(define %list-tail-checked
   (lambda (ls k who)
     (letrec ((go (lambda (ls n)
                    (if (= n 0)
@@ -139,11 +143,11 @@
           (error (string-append who ": index out of range") k)
           (go ls k)))))
 
-(define list-tail (lambda (ls k) (list-tail-checked ls k "list-tail")))
+(define list-tail (lambda (ls k) (%list-tail-checked ls k "list-tail")))
 
 (define list-ref
   (lambda (ls k)
-    (let ((tail (list-tail-checked ls k "list-ref")))
+    (let ((tail (%list-tail-checked ls k "list-ref")))
       (if (pair? tail)
           (car tail)
           (error "list-ref: index out of range" k)))))

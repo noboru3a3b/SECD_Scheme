@@ -1173,9 +1173,9 @@ printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 110
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
-`%` で始まる3つ（`%values->list` / `%wind-push` / `%wind-pop`）は
-**`lib13.scm` が使うための内部名**で、利用者が直接呼ぶものではない
-（第10.10節）。
+`%` で始まる4つは**内部名**で、利用者が直接呼ぶものではない（決定60）。
+C++ 側の `%values->list` / `%wind-push` / `%wind-pop`（第10.10節・第8.3節）と、
+`lib13.scm` の `%list-tail-checked`（第10.6節）である。
 
 `system_lib.scm` は 34 個の `define` と 1 個の `define-macro`（`delay`）を
 持つが、`cdddr` と `memv` はプリミティブが先に定義済みなので読み飛ばされ、
@@ -1272,7 +1272,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | リスト | `list-tail` `list-ref` `member` `assoc` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
 | 多値・動的拡張 | `call-with-values` `dynamic-wind` |
-| 内部ヘルパ | `list-tail-checked` |
+| 内部ヘルパ | `%list-tail-checked` |
 
 凍結仕様に合わせた判断:
 
@@ -1286,14 +1286,12 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
   受け付けること自体に意味がある（他所のコードがそのまま動く）
 - `string` は文字が長さ1の文字列なので `string-append` そのもの
 
-`list-tail-checked` は `list-tail` と `list-ref` が共有する内部ヘルパで、
-利用者が呼ぶものではない。**報告する添字は元の `k`** でなければならず
-（内側で減った途中の値を出すと利用者が渡していない数が `given:` に出る）、
-**見出しの名前も呼んだ側のもの**でなければならない（`list-ref` から来たときに
-`list-tail` と名乗らない）。その2つを一箇所に閉じ込めるために切り出してある。
-
-> この名前だけ、決定60 の「内部名には `%` を付ける」に従っていない。
-> 8日目に置いたもので、規約は13日目に決めたためである。
+`%list-tail-checked` は `list-tail` と `list-ref` が共有する内部ヘルパで、
+**`%` で始まるのは「利用者が呼ぶものではない」印**である（`dev_memo.md`
+決定60）。**報告する添字は元の `k`** でなければならず（内側で減った途中の値を
+出すと利用者が渡していない数が `given:` に出る）、**見出しの名前も呼んだ側の
+もの**でなければならない（`list-ref` から来たときに `list-tail` と名乗らない）。
+その2つを一箇所に閉じ込めるために切り出してある。
 
 ### 10.7 ライブラリの探索
 
