@@ -1,7 +1,7 @@
-# scheme13 解説文書（v1.1）
+# scheme13 解説文書（v1.2）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
-対象は `scheme13/scheme13.cpp`（単一ファイル、4,674 行）と
+対象は `scheme13/scheme13.cpp`（単一ファイル、4,726 行）と
 `scheme13/lib13.scm`（221 行）。
 
 `scheme12_debug`（`scheme12_bignum_boost_debug.cpp`）を、一貫した設計思想の
@@ -30,6 +30,8 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
 出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
 
+> **v1.2 で追ったもの**: `exit` / `quit`（第10.11節）、テストの件数（第12.2節）。
+>
 > **v1.1 で追ったもの**: ポートと標準ポート（第10.9節）、多値と `dynamic-wind`
 > （第10.10節・第8.3節）、`let` がクロージャを確保しないこと（第7.3節）、
 > マクロ展開後のエラー位置（第3.1節）、性能の実測（第8.4節・第14.5節）。
@@ -1161,20 +1163,21 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | 層 | 実体 | 個数 |
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
-| プリミティブ | C++ の関数ポインタ | 110 |
-| ライブラリ | Scheme で書かれた定義 | 68（`system_lib.scm` 33 + `lib13.scm` 35） |
+| プリミティブ | C++ の関数ポインタ | 112 |
+| ライブラリ | Scheme で書かれた定義 | 70（`system_lib.scm` 33 + `lib13.scm` 37） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **206 個**の大域名が起動時に定義される。数え方:
+合計 **210 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 206
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 110
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 210
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 112
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
-`%` で始まる4つは**内部名**で、利用者が直接呼ぶものではない（決定60）。
-C++ 側の `%values->list` / `%wind-push` / `%wind-pop`（第10.10節・第8.3節）と、
+`%` で始まる6つは**内部名**で、利用者が直接呼ぶものではない（決定60）。
+C++ 側の `%values->list` / `%wind-push` / `%wind-pop` / `%wind-top-after` /
+`%exit`（第10.10節・第8.3節・第10.11節）と、
 `lib13.scm` の `%list-tail-checked`（第10.6節）である。
 
 `system_lib.scm` は 34 個の `define` と 1 個の `define-macro`（`delay`）を
@@ -1192,7 +1195,7 @@ let  let*  letrec  and  or  cond  case  do  quasiquote
 **値としては特殊形式オブジェクト**として大域に束縛されている。
 `(procedure? call/cc)` が `FALSE` なのはこのため。
 
-### 10.3 プリミティブ（110）
+### 10.3 プリミティブ（112）
 
 ```cpp
 using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
@@ -1210,8 +1213,8 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | 文字列 | `string-length` `string-ref` `string-set!` `make-string` `string-append` `substring` `string=?` `string<?` `string>?` `string<=?` `string>=?` `char->integer` `integer->char` `string->list` `list->string` `symbol->string` `string->symbol` `number->string` `string->number` |
 | ベクタ | `make-vector` `vector` `vector-length` `vector-ref` `vector-set!` `vector->list` `list->vector` |
 | 入出力 | `display` `write` `newline` `write_newline` `write-char` `open-input-file` `open-output-file` `close-input-port` `close-output-port` `read` `read-char` `peek-char` `char-ready?` `read-line` `read-expr` `current-input-port` `current-output-port` `input-port?` `output-port?` `load` |
-| 多値・動的拡張 | `values` `%values->list` `%wind-push` `%wind-pop` |
-| その他 | `error` `gensym` `random` `random-seed` `gc-collect` `gc-heap-size` `gc-free-bytes` |
+| 多値・動的拡張 | `values` `%values->list` `%wind-push` `%wind-pop` `%wind-top-after` |
+| その他 | `error` `%exit` `gensym` `random` `random-seed` `gc-collect` `gc-heap-size` `gc-free-bytes` |
 | テスト機構 | `test-start` `test-end` |
 | デバッグ | `compile` `disassemble` `trace-on` `trace-off` `globals` `macros` `help` `macroexpand-1` `macroexpand` |
 
@@ -1272,6 +1275,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | リスト | `list-tail` `list-ref` `member` `assoc` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
 | 多値・動的拡張 | `call-with-values` `dynamic-wind` |
+| 終了 | `exit` `quit`（**R5RS 外**。第10.11節） |
 | 内部ヘルパ | `%list-tail-checked` |
 
 凍結仕様に合わせた判断:
@@ -1445,6 +1449,95 @@ scheme13: warning: system_lib.scm not found; the shared library
 
 `dynamic-wind` の実装は第8.3節を見ること。
 
+### 10.11 終了（`exit`）
+
+**`exit` は R5RS に無い**（R7RS 6.14）。`lib13.scm` の採用基準
+「R5RS にあって scheme13 に無いもの」の唯一の例外で、利用者の判断で入れた
+（`dev_memo.md` 決定64）。入れた理由は互換性のほうにある。
+
+| 処理系 | 終える手段 |
+| --- | --- |
+| 原典 `micro_Scheme8.lisp` | **`quit`**。自分自身に束縛された変数で、REPL のループが評価結果を見て抜ける（`micro_Scheme8.lisp:383`） |
+| scheme12 | EOF（Ctrl-D）のみ |
+| scheme13（14日目まで） | EOF（Ctrl-D）のみ。`(help)` にもその旨が無かった |
+
+原典にあったものを scheme12 が落とし、scheme13 がそのまま継いでいた。
+§1.5「デバッグ機能は一級市民」に照らすと穴なので塞いだ。
+
+#### 終了コード
+
+R7RS 6.14 に倣う。引数なしと `#t` は 0、`#f` は 1、整数はその値、
+それ以外は 0。値は**下位8ビットに畳む**。親プロセスにはどのみち
+下位8ビットしか届かないので、畳んでおけば C++ 側の値と実際に観測される
+終了コードが一致する。
+
+```sh
+scheme13 --load f.scm   # (exit)     -> 0    (exit #t) -> 0
+                        # (exit #f)  -> 1    (exit 3)  -> 3
+                        # (exit 256) -> 0    (exit -1) -> 255
+```
+
+#### 後始末を飛ばさない
+
+`exit` は `std::exit` を呼ばない。**`SchemeExit` を投げて `main` で受け、
+普通に `return` する。**
+
+```cpp
+struct SchemeExit { int code; };   // セクション2
+```
+
+理由が2つある。
+
+- **`std::exception` を継承しない。** 継承すると `try_load_library` や
+  REPL の `catch (const std::exception&)` に飲まれ、終了要求が
+  「読めなかった」「エラーだった」に化ける
+- **`main` から普通に返れば stdio が開いている出力ポートを流して閉じる。**
+  `std::exit` でも流れるが、例外にしておくと後始末を1箇所に集められる（§1.6）
+
+#### 外へ出る `dynamic-wind` の `after`
+
+R7RS の `exit` は、外へ出る `dynamic-wind` の `after` を走らせてから終わる。
+scheme13 では**その走査を Scheme 側に書く**。プリミティブから VM へ
+再入する経路を作らない方針（決定59）は継続の巻き戻しと同じである。
+
+```scheme
+(define exit
+  (lambda args
+    (let loop ()
+      (let ((after (%wind-top-after)))
+        (if after
+            (begin (%wind-pop) (after) (loop)))))
+    (%exit (if (null? args) 0 (car args)))))
+```
+
+C++ 側が足すのは `%wind-top-after`（いちばん内側の枠の `after`、無ければ
+`#f`）と `%exit`（終了コードを決めて投げる）の2つだけ。
+
+**`%wind-pop` を `(after)` より先に呼ぶ順序に意味がある。** `after` の中から
+また `exit` されたときに、同じ枠を二度巻き戻さないため。セクション10 の
+`build_rewind_code` が同じ理由で同じ順序にしている（第8.3節）。
+
+```scheme
+(dynamic-wind (lambda () (display "in outer "))
+  (lambda ()
+    (dynamic-wind (lambda () (display "in inner "))
+      (lambda () (display "body ") (exit 3))
+      (lambda () (display "out inner "))))
+  (lambda () (display "out outer ")))
+; 出力: in outer in inner body out inner out outer
+; 終了コード: 3
+```
+
+`after` の中から継続で外へ跳ばれたら `exit` は成立しない。それでよい。
+跳んだのなら、それは `exit` より後に決まった行き先である。
+
+#### `quit` を手続きにした理由
+
+原典の `quit` は**変数**なので、裸で `quit` と打つと抜けられた。これを
+そのまま復活させると、REPL が評価結果を見て終了を決めることになり、
+`(display 'quit)` のような式まで終了の合図になりかねない。scheme13 では
+`exit` の別名の**手続き**とし、`(quit)` と書く。
+
 ---
 
 ## 11. REPL とデバッグ機能
@@ -1473,7 +1566,7 @@ scheme13 --help         Show this help
 
 ```
 $ scheme13
-scheme13 debug REPL. Type (help) for commands.
+scheme13 debug REPL. Type (help) for commands, (exit) to quit.
 scheme13> (car 5)
 Error: <stdin:1>:1:1: car: wrong type of argument
   expected: a pair
@@ -1488,6 +1581,10 @@ Bye!
 
 REPL で入力した式は `<stdin:N>` という名前のソースとして登録されるので、
 **キャレット行が REPL でも出る。** N は入力の通し番号。
+
+抜けるのは `(exit)`（または `(quit)`）と Ctrl-D の2通り。`Bye!` が出るのは
+Ctrl-D のほうだけで、`(exit)` は何も言わずに終了コードを返して終わる
+（第10.11節）。
 
 ### 11.3 デバッグコマンド
 
@@ -1507,6 +1604,11 @@ Expansion:
 Tracing:
   (trace-on)            Enable VM step-by-step trace
   (trace-off)           Disable trace
+
+Leaving:
+  (exit)                Quit; (exit n) sets the exit status
+  (quit)                Same as (exit)
+  Ctrl-D                Quit (end of input)
 ```
 
 `(compile expr)` は式をコンパイルして命令列を見せる。**引数は評価されるので、
@@ -1558,7 +1660,7 @@ Dump: 0 frame(s)
 ```sh
 make -C scheme13 selftest   # 150 checks — 凍結仕様との突き合わせ（C++ 単体）
 make -C scheme13 compare    #  15 passed — 構文展開が scheme12 と等価か
-make -C scheme13 test       #  17 passed — 既存 .scm 資産との互換性（受け入れ基準）
+make -C scheme13 test       #  23 passed — 既存 .scm 資産との互換性（受け入れ基準）
 make -C scheme13 bench      # 呼び出し性能
 ```
 
@@ -1579,7 +1681,7 @@ make -C scheme13 bench      # 呼び出し性能
 | `selftest_macroexpand` | 展開の観察 |
 | `selftest_test_matching` | テスト機構の照合規則 |
 
-### 12.2 ゴールデン（14件）+ 起動時ライブラリ（3件）
+### 12.2 ゴールデン（15件）+ 起動時ライブラリ（3件）+ 終了コード（5件）
 
 既存 `.scm` 資産を走らせ、**出力全体をバイト単位で**ゴールデンと比べる。
 これが「既存 `.scm` を無修正で動かす」の唯一の判定基準である。
@@ -1591,10 +1693,16 @@ make -C scheme13 bench      # 呼び出し性能
 | `test-case6.scm` | scheme13 でテスト機構を復活させたため、出力そのものが別物 |
 | `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト。scheme12 に比べる相手が無い |
 | `scheme13/tests/port_test.scm` | 同上（ポート。第10.9節） |
+| `scheme13/tests/exit_test.scm` | 同上（`exit`。第10.11節） |
 
-加えて **cwd を変えて起動する回帰が3件**入っている（合計 17 件）。
-ゴールデンは全部リポジトリのルートから走るので、これが無いと
-ライブラリ探索の壊れ方に気づけない（第10.7節）。
+加えて2種類の回帰が入っている（合計 23 件）。
+
+- **cwd を変えて起動する回帰が3件。** ゴールデンは全部リポジトリのルートから
+  走るので、これが無いとライブラリ探索の壊れ方に気づけない（第10.7節）
+- **終了コードが5件**（`(exit)` / `(exit #t)` / `(exit #f)` / `(exit 3)` /
+  `(quit)`）。1つの `.scm` では一度しか終われないので、ゴールデンでは
+  `(exit 3)` の1通りしか見られない。残りは `run_golden.sh` が式ごとに走らせる。
+  `exit_test.scm` のほうは `dynamic-wind` との絡み（第10.11節）を見ている
 
 ### 12.3 原典のテスト機構
 
@@ -1698,7 +1806,7 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 ### 13.3 上位互換であること
 
-scheme13 は **206 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **210 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
 差分の 50 個: `lib13.scm` の 35 個 + `error` + `macroexpand-1` +
@@ -1752,6 +1860,10 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 **どれも「無くて困った」という報告は来ていない。**
 入れるかどうかは `lib13.scm` の基準（第10.6節）ごと利用者と決める話である。
+
+R5RS の外から入れたものが1つだけある。**`exit` / `quit`**（15日目。第10.11節）。
+基準を緩めたのではなく、**原典 `micro_Scheme8.lisp` にあった `quit` を
+scheme12 が落としていた**ので戻した、という互換性の話である。
 
 ### 14.2 設計として入れないもの
 
@@ -2249,7 +2361,7 @@ scheme13 は scheme12 と**同じ振る舞いを、選び直した設計で**実
 Scheme 処理系である。
 
 - 既存 `.scm` 資産はゴールデンで**バイト単位で一致**する（受け入れ基準）
-- 大域名は scheme12 の 156 個をすべて含み、**50 個多い上位互換**（206 個）
+- 大域名は scheme12 の 156 個をすべて含み、**54 個多い上位互換**（210 個）
 - **R5RS の不足はゼロ。** 8日目に数え上げた 40 件を、`lib13.scm`（8日目）、
   ポート（10日目）、多値と `dynamic-wind`（13日目）で埋めた
 - 呼び出し性能は**約 27 倍**。実ワークロード（赤黒木）は 12日目に

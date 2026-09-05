@@ -183,11 +183,23 @@ static std::string source_name(const SourcePos& pos) {
     return to_std(g_sources[pos.file].name);
 }
 
-// 処理系が投げる唯一の例外型。位置は任意（known() が false なら位置なし）。
+// 処理系が投げる例外はこれと SchemeExit の2つだけ。
+// 位置は任意（known() が false なら位置なし）。
 struct SchemeError : std::runtime_error {
     SourcePos pos;
     SchemeError(const std::string& msg, SourcePos p)
         : std::runtime_error(msg), pos(p) {}
+};
+
+// (exit) の終了要求（15日目の決定64）。誤りの報告ではないので SchemeError とは
+// 別にし、**std::exception を継承しない**。継承すると try_load_library や
+// REPL の catch (const std::exception&) に飲まれて、終了要求が「読めなかった」
+// 「エラーだった」に化ける。main まで素通りさせ、そこで return する。
+//
+// std::exit を呼ばずに例外にするのは、main から普通に返れば stdio が
+// 開いている出力ポートを流して閉じてくれるから（§1.6 の後始末）。
+struct SchemeExit {
+    int code;
 };
 
 [[noreturn]] static void error_at(const SourcePos& pos, const std::string& msg) {
@@ -3340,6 +3352,14 @@ static ValuePtr prim_wind_pop(ValuePtr*, std::size_t n) {
     if (!g_winds.empty()) g_winds.pop_back();
     return g_nil;
 }
+// いちばん内側の枠の after。枠が無ければ #f（15日目の決定64）。
+// exit が「外へ出る after を内側から順に呼ぶ」ために使う。**呼ぶのは
+// Scheme 側**。プリミティブから VM へ再入する経路は作らない（決定59）。
+static ValuePtr prim_wind_top_after(ValuePtr*, std::size_t n) {
+    need_args("%wind-top-after", n, 0, 0);
+    if (g_winds.empty()) return g_false;
+    return g_winds.back().after;
+}
 
 // --- その他 ----------------------------------------------------------------
 
@@ -3360,6 +3380,27 @@ static ValuePtr prim_raise_error(ValuePtr* a, std::size_t n) {
                                       : to_string(a[0]);
     for (std::size_t i = 1; i < n; ++i) msg += detail("given", to_string(a[i]));
     error_here(msg);
+}
+
+// (%exit obj) — 終了要求を投げる。**外へ出る dynamic-wind の after は
+// lib13.scm の exit が先に走らせてある**ので、ここは終了コードを決めるだけ
+// （15日目の決定64）。
+//
+// 終了コードは R7RS 6.14 に倣う: 引数なしと #t は 0、#f は 1、整数はその値、
+// それ以外は 0（R7RS が実装依存としている側）。
+//
+// 下位8ビットに畳むのは、**親プロセスにはどのみち下位8ビットしか届かない**
+// から。畳まずに int へ落とすと C++ 側の値と実際の終了コードが食い違い、
+// (exit 256) が 0、(exit -1) が 255 になる理由を追えなくなる。畳んでおけば
+// この関数が返す値がそのまま観測される値になる。
+static ValuePtr prim_exit_now(ValuePtr* a, std::size_t n) {
+    need_args("%exit", n, 0, 1);
+    int code = 0;
+    if (n == 1) {
+        if (is_false(a[0]))       code = 1;
+        else if (is_number(a[0])) code = static_cast<int>(ll_of(a[0], "exit") & 0xFF);
+    }
+    throw SchemeExit{code};
 }
 
 static ValuePtr prim_gensym(ValuePtr* a, std::size_t n) {
@@ -3563,6 +3604,11 @@ Tracing:
   (trace-on)            Enable VM step-by-step trace
   (trace-off)           Disable trace
 
+Leaving:
+  (exit)                Quit; (exit n) sets the exit status
+  (quit)                Same as (exit)
+  Ctrl-D                Quit (end of input)
+
 ================================
 )");
     return make_symbol(":help");
@@ -3648,8 +3694,9 @@ static void init_globals() {
 
         {"values", prim_values}, {"%values->list", prim_values_to_list},
         {"%wind-push", prim_wind_push}, {"%wind-pop", prim_wind_pop},
+        {"%wind-top-after", prim_wind_top_after},
 
-        {"error", prim_raise_error},
+        {"error", prim_raise_error}, {"%exit", prim_exit_now},
         {"gensym", prim_gensym}, {"random", prim_random}, {"random-seed", prim_random_seed},
         {"gc-collect", prim_gc_collect}, {"gc-heap-size", prim_gc_heap_size},
         {"gc-free-bytes", prim_gc_free_bytes},
@@ -4554,7 +4601,7 @@ static std::string read_multiline_input() {
 }
 
 static int run_repl() {
-    std::printf("scheme13 debug REPL. Type (help) for commands.\n");
+    std::printf("scheme13 debug REPL. Type (help) for commands, (exit) to quit.\n");
     int repl_count = 0;
     for (;;) {
         std::string input = read_multiline_input();
@@ -4580,7 +4627,7 @@ static void usage() {
     std::printf(
         "scheme13 (SECD with Boost bignum + Debug)\n"
         "Usage:\n"
-        "  scheme13                Start interactive REPL\n"
+        "  scheme13                Start interactive REPL ((exit) or Ctrl-D to quit)\n"
         "  scheme13 --load FILE    Evaluate file and exit\n"
         "  scheme13 --selftest     Check against the frozen spec\n"
         "  scheme13 --read FILE    Print the S-expressions as read\n"
@@ -4662,6 +4709,11 @@ int main(int argc, char** argv) {
         }
         return run_repl();
 
+    // (exit) の終了要求（決定64）。ここまで素通りさせ、普通に return する
+    // ことで stdio が開いている出力ポートを流して閉じる。
+    } catch (const SchemeExit& e) {
+        std::fflush(stdout);
+        return e.code;
     } catch (const SchemeError& e) {
         std::fflush(stdout);
         std::fprintf(stderr, "Fatal error: %s\n", format_error(e).c_str());

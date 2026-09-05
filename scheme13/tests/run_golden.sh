@@ -41,7 +41,8 @@ trap 'rm -f "$tmp"' EXIT
 # scheme13 が自分で持つテスト。上の FILES と違い、これは scheme12 の出力では
 # なく scheme13 の出力をゴールデンにしてある（scheme12 には lib13.scm が
 # 無いので比べる相手が存在しない）。**./scheme12_debug を渡すと落ちる。**
-OWN_TESTS="scheme13/tests/lib13_test.scm scheme13/tests/port_test.scm"
+OWN_TESTS="scheme13/tests/lib13_test.scm scheme13/tests/port_test.scm \
+           scheme13/tests/exit_test.scm"
 
 run_one() {
     f=$1
@@ -90,6 +91,35 @@ for dir in "$ROOT" "$ROOT/scheme13" "$ROOT/scheme13/tests"; do
         fail=$((fail + 1))
     fi
 done
+rm -f "$probe"
+
+# --- 終了コード（15日目の決定64）----------------------------------------
+# (exit) が R7RS 6.14 のとおりに終了コードを決めること。ゴールデンは
+# 1ファイルにつき一度しか終われないので、ここで式ごとに確かめる。
+# exit_test.scm のほうは dynamic-wind との絡みを見ている。
+check_exit() {
+    expr=$1
+    want=$2
+    echo "$expr" > "$probe"
+    set +e
+    "$INTERP" --load "$probe" > /dev/null 2>&1
+    got=$?
+    set -e
+    if [ "$got" = "$want" ]; then
+        printf '  PASS  exit status of %s\n' "$expr"
+        pass=$((pass + 1))
+    else
+        printf '  FAIL  exit status of %s (want %s, got %s)\n' "$expr" "$want" "$got"
+        fail=$((fail + 1))
+    fi
+}
+
+probe=$(mktemp)
+check_exit '(exit)'    0
+check_exit '(exit #t)' 0
+check_exit '(exit #f)' 1
+check_exit '(exit 3)'  3
+check_exit '(quit)'    0
 rm -f "$probe"
 
 # test_improvements.scm と port_test.scm が置いていく一時ファイル
