@@ -355,3 +355,34 @@ comm -23 /tmp/orig_sf /tmp/g13
 
 **原典は `(quit)` では終われない。** `quit` は変数なので裸で `quit` と打つ。
 `(quit)` は `The value QUIT is not of type LIST` で落ちる。
+
+---
+
+**既存の .scm に実数のリテラルが無いことを確かめる**（`dev_memo.md` 決定89。
+リーダに実数を入れても既存の出力が動かないことの根拠）:
+
+```sh
+cd /workspaces/SECD_Scheme
+for f in system_lib.scm mlib7.scm hashtable_lib.scm rbtree_lib_improved.scm \
+         list_test1.scm test_fixes.scm test_improvements.scm test_vector_env.scm \
+         rbtree_robustness_test.scm rbtree_stress_test_safe.scm performance_test.scm \
+         test-case6.scm scheme13/lib13.scm scheme13/tests/*.scm; do
+  # コメントと文字列リテラルを落としてから、実数に見えるトークンを探す
+  sed 's/;.*//; s/"[^"]*"//g' "$f" \
+    | grep -noE '(^|[^A-Za-z0-9_?!*/<>=~+-])[-+]?([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+[eE][-+]?[0-9]+)|[-+](inf|nan)\.0' \
+    | sed "s|^|$f:|"
+done
+# 出力が無ければ1つも無い（18日目の実測: 無し）
+```
+
+**整数の `/` が受け入れ基準の12件で実際に走るか**（`dev_memo.md` 決定82）:
+
+```sh
+for f in system_lib.scm mlib7.scm hashtable_lib.scm rbtree_lib_improved.scm \
+         list_test1.scm test_fixes.scm test_improvements.scm test_vector_env.scm \
+         rbtree_robustness_test.scm rbtree_stress_test_safe.scm performance_test.scm \
+         test-case6.scm; do
+  sed 's/;.*//; s/"[^"]*"//g' "$f" | grep -nE '(^|[( ])/([) ]|$)' | sed "s|^|$f:|"
+done
+# 18日目の実測: 4箇所だけ。うち走るのは「割り切れる2式」と「エラーになること」の確認のみ
+```
