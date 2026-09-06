@@ -2768,6 +2768,31 @@ static BigInt num_of(ValuePtr v, const char* who) {
     prim_type_error(who, "an integer", v);
 }
 
+// 数を倍精度にする。**整数から実数への変換はここ1箇所だけ**（20日目の決定101）。
+// 大きすぎる整数は ±inf になる。例外にはしない（決定88 で「桁は落ちる」と
+// 書いたのと同じ性質で、Boost の convert_to<double> がそう振る舞う。実測）。
+static double to_double(ValuePtr v, const char* who) {
+    if (is_fixnum(v)) return static_cast<double>(fixnum_value(v));
+    if (is_flonum(v)) return static_cast<Flonum*>(v)->v;
+    if (has_tag(v, Tag::Bignum)) return static_cast<Bignum*>(v)->v.convert_to<double>();
+    prim_type_error(who, "a number", v);
+}
+
+// 引数のどれかが不正確か。**速い道（全部 fixnum）はここを通らない**（決定91）。
+// 落ちた先で1度だけ呼び、bignum の道と double の道を選び分ける。
+//
+// **数でないものはこの1回の走査で弾く。** そうしないと、選ばれた先の
+// num_of が `expected: an integer` と言ってしまう。算術は実数も受けるので、
+// それは嘘になる（20日目の決定102）。
+static bool any_inexact(ValuePtr* a, std::size_t from, std::size_t n, const char* who) {
+    bool inexact = false;
+    for (std::size_t i = from; i < n; ++i) {
+        if (is_flonum(a[i]))         { inexact = true; continue; }
+        if (!is_exact_int(a[i]))     prim_type_error(who, "a number", a[i]);
+    }
+    return inexact;
+}
+
 static long long ll_of(ValuePtr v, const char* who) {
     if (is_fixnum(v)) return static_cast<long long>(fixnum_value(v));
     BigInt n = num_of(v, who);
@@ -2808,6 +2833,11 @@ static ValuePtr prim_add(ValuePtr* a, std::size_t n) {
         acc = r;
     }
     if (i == n) return make_fixnum(acc);
+    if (any_inexact(a, i, n, "+")) {             // 不正確が混ざる（決定91）
+        double d = static_cast<double>(acc);
+        for (; i < n; ++i) d += to_double(a[i], "+");
+        return make_flonum(d);
+    }
     BigInt big(static_cast<long long>(acc));
     for (; i < n; ++i) big += num_of(a[i], "+");
     return make_int(big);
@@ -2820,6 +2850,7 @@ static ValuePtr prim_sub(ValuePtr* a, std::size_t n) {
             std::intptr_t v = fixnum_value(a[0]);
             if (v != FIXNUM_MIN) return make_fixnum(-v);
         }
+        if (is_flonum(a[0])) return make_flonum(-static_cast<Flonum*>(a[0])->v);
         return make_int(BigInt(-num_of(a[0], "-")));
     }
     if (is_fixnum(a[0])) {
@@ -2833,9 +2864,19 @@ static ValuePtr prim_sub(ValuePtr* a, std::size_t n) {
             acc = r;
         }
         if (i == n) return make_fixnum(acc);
+        if (any_inexact(a, i, n, "-")) {         // 不正確が混ざる（決定91）
+            double d = static_cast<double>(acc);
+            for (; i < n; ++i) d -= to_double(a[i], "-");
+            return make_flonum(d);
+        }
         BigInt big(static_cast<long long>(acc));
         for (; i < n; ++i) big -= num_of(a[i], "-");
         return make_int(big);
+    }
+    if (any_inexact(a, 0, n, "-")) {
+        double d = to_double(a[0], "-");
+        for (std::size_t i = 1; i < n; ++i) d -= to_double(a[i], "-");
+        return make_flonum(d);
     }
     BigInt big = num_of(a[0], "-");
     for (std::size_t i = 1; i < n; ++i) big -= num_of(a[i], "-");
@@ -2853,16 +2894,31 @@ static ValuePtr prim_mul(ValuePtr* a, std::size_t n) {
         acc = r;
     }
     if (i == n) return make_fixnum(acc);
+    if (any_inexact(a, i, n, "*")) {             // 不正確が混ざる（決定91）
+        double d = static_cast<double>(acc);
+        for (; i < n; ++i) d *= to_double(a[i], "*");
+        return make_flonum(d);
+    }
     BigInt big(static_cast<long long>(acc));
     for (; i < n; ++i) big *= num_of(a[i], "*");
     return make_int(big);
 }
 
-// (/ x) はエラー。0方向への切り捨て（quotient 相当）。§2.3 の凍結仕様。
+// (/ x) は**引数の型によらずエラー**（型で arity を変えない。§2.3）。
+//
+// **引数がすべて正確な整数なら0方向への切り捨て**（quotient 相当）。これは
+// 18日目に利用者が3案から選んだ仕様で、R5RS から最も遠い1点である（決定82）。
+// 実数が一つでも混ざれば実数除算になり、0除算も IEEE 754 に従って ±inf / nan を
+// 返す（例外にしない。§2.3）。**`(/ 1 3)` は 0、`(/ 1.0 3)` は 0.333...**。
 static ValuePtr prim_div(ValuePtr* a, std::size_t n) {
     if (n < 2)
         prim_error("/", "requires at least 2 arguments (single-argument reciprocal is not "
                         "supported; use (/ 1 x) instead)");
+    if (any_inexact(a, 0, n, "/")) {
+        double d = to_double(a[0], "/");
+        for (std::size_t i = 1; i < n; ++i) d /= to_double(a[i], "/");
+        return make_flonum(d);
+    }
     BigInt acc = num_of(a[0], "/");
     for (std::size_t i = 1; i < n; ++i) {
         BigInt d = num_of(a[i], "/");
@@ -2883,31 +2939,127 @@ static ValuePtr prim_modulo(ValuePtr* a, std::size_t n) {
     return make_int(r);
 }
 
-static int num_cmp(ValuePtr x, ValuePtr y, const char* who) {
-    if (is_fixnum(x) && is_fixnum(y)) {
+// 比較の結果は**4状態**（18日目の決定87）。NaN は「どの比較も偽」でなければ
+// ならないが、-1 / 0 / 1 の3状態ではそれを表せない（`c == 0` と `c < 0` と
+// `c > 0` を同時に偽にする整数は存在しない）。**これは実装の都合ではなく仕様**で、
+// `(< +nan.0 1)` も `(>= +nan.0 1)` も FALSE になる。
+enum class Cmp { LT, EQ, GT, Unordered };
+
+static Cmp num_cmp(ValuePtr x, ValuePtr y, const char* who) {
+    if (is_fixnum(x) && is_fixnum(y)) {          // 速い道。ここは触らない（決定91）
         std::intptr_t a = fixnum_value(x), b = fixnum_value(y);
-        return (a < b) ? -1 : (a > b) ? 1 : 0;
+        return (a < b) ? Cmp::LT : (a > b) ? Cmp::GT : Cmp::EQ;
+    }
+    if (is_flonum(x) || is_flonum(y)) {          // 混合比較は倍精度に寄せる（決定88）
+        double a = to_double(x, who), b = to_double(y, who);
+        if (a < b) return Cmp::LT;
+        if (a > b) return Cmp::GT;
+        if (a == b) return Cmp::EQ;
+        return Cmp::Unordered;                   // NaN が混ざった
     }
     BigInt a = num_of(x, who), b = num_of(y, who);
-    return (a < b) ? -1 : (a > b) ? 1 : 0;
+    return (a < b) ? Cmp::LT : (a > b) ? Cmp::GT : Cmp::EQ;
 }
 
-// 引数が2個未満なら TRUE（scheme12 と同じ）
+// 引数が2個未満なら TRUE（scheme12 と同じ）。
+// **`<=` を「`<` の否定」で書かないこと**（NaN でひっくり返る。決定87）。
 #define DEFINE_NUM_CMP(fn, name, test)                                      \
     static ValuePtr fn(ValuePtr* a, std::size_t n) {                        \
         if (n < 2) return g_true;                                           \
         for (std::size_t i = 1; i < n; ++i) {                               \
-            int c = num_cmp(a[i - 1], a[i], name);                          \
+            Cmp c = num_cmp(a[i - 1], a[i], name);                          \
             if (!(test)) return g_false;                                    \
         }                                                                   \
         return g_true;                                                      \
     }
-DEFINE_NUM_CMP(prim_num_eq, "=",  c == 0)
-DEFINE_NUM_CMP(prim_lt,     "<",  c <  0)
-DEFINE_NUM_CMP(prim_gt,     ">",  c >  0)
-DEFINE_NUM_CMP(prim_le,     "<=", c <= 0)
-DEFINE_NUM_CMP(prim_ge,     ">=", c >= 0)
+DEFINE_NUM_CMP(prim_num_eq, "=",  c == Cmp::EQ)
+DEFINE_NUM_CMP(prim_lt,     "<",  c == Cmp::LT)
+DEFINE_NUM_CMP(prim_gt,     ">",  c == Cmp::GT)
+DEFINE_NUM_CMP(prim_le,     "<=", c == Cmp::LT || c == Cmp::EQ)
+DEFINE_NUM_CMP(prim_ge,     ">=", c == Cmp::GT || c == Cmp::EQ)
 #undef DEFINE_NUM_CMP
+
+// --- 正確さと丸め（20日目。決定93 の表のうち double が要るもの）------------
+//
+// どれも値の**表現**を見るので Scheme では書けない。`lib13.scm` にあった
+// 同名の定義（「整数しか無いので」を前提にしたもの）は消した。**横に足さない。**
+
+static ValuePtr prim_exactp(ValuePtr* a, std::size_t n) {
+    need_args("exact?", n, 1, 1);
+    if (!is_number(a[0])) prim_type_error("exact?", "a number", a[0]);
+    return make_bool(is_exact_int(a[0]));
+}
+static ValuePtr prim_inexactp(ValuePtr* a, std::size_t n) {
+    need_args("inexact?", n, 1, 1);
+    if (!is_number(a[0])) prim_type_error("inexact?", "a number", a[0]);
+    return make_bool(is_flonum(a[0]));
+}
+
+// 実数が整数かどうか。**+inf.0 と +nan.0 は整数ではない**（floor が自分自身に
+// 等しくなってしまうので、有限かどうかを先に見る）。
+static bool flonum_is_integer(double d) { return std::isfinite(d) && d == std::floor(d); }
+
+// R5RS の型述語。**数でなければ偽**（エラーにしない。型述語だから）。
+static ValuePtr prim_integerp(ValuePtr* a, std::size_t n) {
+    need_args("integer?", n, 1, 1);
+    if (is_exact_int(a[0])) return g_true;
+    if (is_flonum(a[0])) return make_bool(flonum_is_integer(static_cast<Flonum*>(a[0])->v));
+    return g_false;
+}
+// 有限な実数はすべて有理数（2進小数だから）。無限大と非数はそうではない。
+static ValuePtr prim_rationalp(ValuePtr* a, std::size_t n) {
+    need_args("rational?", n, 1, 1);
+    if (is_exact_int(a[0])) return g_true;
+    if (is_flonum(a[0])) return make_bool(std::isfinite(static_cast<Flonum*>(a[0])->v));
+    return g_false;
+}
+// 複素数は無いので、数ならば実数であり複素数でもある（§2.2）
+static ValuePtr prim_realp(ValuePtr* a, std::size_t n) {
+    need_args("real?", n, 1, 1);
+    return make_bool(is_number(a[0]));
+}
+static ValuePtr prim_complexp(ValuePtr* a, std::size_t n) {
+    need_args("complex?", n, 1, 1);
+    return make_bool(is_number(a[0]));
+}
+
+static ValuePtr prim_exact_to_inexact(ValuePtr* a, std::size_t n) {
+    need_args("exact->inexact", n, 1, 1);
+    if (!is_number(a[0])) prim_type_error("exact->inexact", "a number", a[0]);
+    if (is_flonum(a[0])) return a[0];
+    return make_flonum(to_double(a[0], "exact->inexact"));
+}
+
+// **有理数が無いので、整数値でない実数は正確な数にできない**（決定93）。
+// 黙って切り捨てず、値そのものの範囲の誤りとして知らせる（§4.2 の見出し）。
+static ValuePtr prim_inexact_to_exact(ValuePtr* a, std::size_t n) {
+    need_args("inexact->exact", n, 1, 1);
+    if (!is_number(a[0])) prim_type_error("inexact->exact", "a number", a[0]);
+    if (is_exact_int(a[0])) return a[0];
+    double d = static_cast<Flonum*>(a[0])->v;
+    if (!flonum_is_integer(d))
+        prim_error("inexact->exact",
+                   "argument out of range" +
+                   expected_given("a real with no fractional part (there are no rationals)",
+                                  to_string(a[0])));
+    return make_int(BigInt(d));
+}
+
+// R5RS: 正確な整数はそのまま、実数は**実数のまま**返す（決定85。正確さを
+// またいで正規化しない）。`round` は**偶数丸め**で、(round 2.5) は 2.0、
+// (round 3.5) は 4.0 になる（std::nearbyint の既定の丸めがそれ）。
+#define DEFINE_ROUND(fn, name, op)                                          \
+    static ValuePtr fn(ValuePtr* a, std::size_t n) {                        \
+        need_args(name, n, 1, 1);                                           \
+        if (is_exact_int(a[0])) return a[0];                                \
+        if (!is_flonum(a[0])) prim_type_error(name, "a number", a[0]);      \
+        return make_flonum(op(static_cast<Flonum*>(a[0])->v));              \
+    }
+DEFINE_ROUND(prim_floor,    "floor",    std::floor)
+DEFINE_ROUND(prim_ceiling,  "ceiling",  std::ceil)
+DEFINE_ROUND(prim_truncate, "truncate", std::trunc)
+DEFINE_ROUND(prim_round,    "round",    std::nearbyint)
+#undef DEFINE_ROUND
 
 // --- ペアとリスト ----------------------------------------------------------
 
@@ -3019,7 +3171,7 @@ static bool eqv_number(ValuePtr x, ValuePtr y) {
         double b = static_cast<Flonum*>(y)->v;
         return std::memcmp(&a, &b, sizeof a) == 0;
     }
-    return num_cmp(x, y, "eqv?") == 0;
+    return num_cmp(x, y, "eqv?") == Cmp::EQ;
 }
 
 // eq? / eqv?: 数値は値比較、シンボルは名前比較、それ以外はポインタ比較（§2.2）。
@@ -3844,6 +3996,14 @@ static void init_globals() {
         {"=", prim_num_eq}, {"<", prim_lt}, {">", prim_gt},
         {"<=", prim_le}, {">=", prim_ge},
 
+        {"exact?", prim_exactp}, {"inexact?", prim_inexactp},
+        {"integer?", prim_integerp}, {"rational?", prim_rationalp},
+        {"real?", prim_realp}, {"complex?", prim_complexp},
+        {"exact->inexact", prim_exact_to_inexact},
+        {"inexact->exact", prim_inexact_to_exact},
+        {"floor", prim_floor}, {"ceiling", prim_ceiling},
+        {"truncate", prim_truncate}, {"round", prim_round},
+
         {"cons", prim_cons}, {"car", prim_car}, {"cdr", prim_cdr},
         {"set-car!", prim_set_car}, {"set-cdr!", prim_set_cdr},
         {"caar", prim_caar}, {"cadr", prim_cadr}, {"cdar", prim_cdar},
@@ -4560,6 +4720,22 @@ static void selftest_errors() {
              "integer->char: argument out of range\n"
              "  expected: an ASCII code from 0 to 127\n  given: 999");
 
+    // 算術は実数も受けるので、数でない引数は「an integer」ではなく
+    // 「a number」と言う（20日目の決定102）
+    check_eq("arithmetic type error",
+             eval_error_body("(+ 1 \"x\")"),
+             "+: wrong type of argument\n  expected: a number\n  given: \"x\"");
+    // 有理数が無いので、整数値でない実数は正確な数にできない（決定93）
+    check_eq("no exact representation",
+             eval_error_body("(inexact->exact 2.5)"),
+             "inexact->exact: argument out of range\n"
+             "  expected: a real with no fractional part (there are no rationals)\n"
+             "  given: 2.5");
+    // 整数を要求する場所は実数を受け取らない（決定92）
+    check_eq("index rejects a real",
+             eval_error_body("(vector-ref (vector 1 2) 1.0)"),
+             "vector-ref: wrong type of argument\n  expected: an integer\n  given: 1.0");
+
     check_eq("unbound variable",
              eval_error_body("(nosuchthing 1)"),
              "unbound variable: nosuchthing\n"
@@ -4691,6 +4867,56 @@ static void selftest_eval() {
     check_eq("div trunc",  eval_to_string("(/ -7 2)"),            "-3");
     check_eq("modulo neg", eval_to_string("(modulo -7 2)"),       "1");
     check_eq("modulo pos", eval_to_string("(modulo 7 -2)"),       "-1");
+
+    // --- 実数（20日目）------------------------------------------------------
+    // 伝播規則: 一つでも不正確なら結果も不正確（決定91）
+    check_eq("contagion +",  eval_to_string("(+ 1 1.5)"),   "2.5");
+    check_eq("contagion -",  eval_to_string("(- 1 0.5)"),   "0.5");
+    check_eq("contagion *",  eval_to_string("(* 2 3.0)"),   "6.0");
+    check_eq("negate real",  eval_to_string("(- 2.5)"),     "-2.5");
+    // **整数だけなら1つも変わらない**（ここが崩れたら §5.1 が壊れる）
+    check_eq("exact stays",  eval_to_string("(+ 1 2)"),     "3");
+    check_eq("exact / stays", eval_to_string("(/ 7 2)"),    "3");
+    // §2.3 の §/。整数どうしは切り捨て、実数が混ざれば実数除算（決定82）
+    check_eq("div inexact",  eval_to_string("(/ 7 2.0)"),   "3.5");
+    check_eq("div 1/3",      eval_to_string("(/ 1 3)"),     "0");
+    check_eq("div 1.0/3",    eval_to_string("(/ 1.0 3)"),   "0.3333333333333333");
+    check_eq("div zero real", eval_to_string("(/ 1.0 0.0)"), "+inf.0");
+    // 混合比較は倍精度に寄せる（決定88）
+    check_eq("mixed =",      eval_to_string("(= 1 1.0)"),      "TRUE");
+    check_eq("mixed <",      eval_to_string("(< 1 1.5 2)"),    "TRUE");
+    check_eq("eqv exactness", eval_to_string("(eqv? 1 1.0)"),  "FALSE");
+    // **NaN はどの比較も偽**（決定87）。`>=` を「`<` の否定」で書いていたら落ちる
+    check_eq("nan =",  eval_to_string("(= +nan.0 +nan.0)"), "FALSE");
+    check_eq("nan <",  eval_to_string("(< +nan.0 1)"),      "FALSE");
+    check_eq("nan >",  eval_to_string("(> +nan.0 1)"),      "FALSE");
+    check_eq("nan <=", eval_to_string("(<= 1 +nan.0)"),     "FALSE");
+    check_eq("nan >=", eval_to_string("(>= +nan.0 1)"),     "FALSE");
+    check_eq("inf cmp", eval_to_string("(< 1e308 +inf.0)"), "TRUE");
+    // 正確さの述語と変換（決定93）
+    check_eq("exact? int",    eval_to_string("(exact? 3)"),        "TRUE");
+    check_eq("exact? real",   eval_to_string("(exact? 3.0)"),      "FALSE");
+    check_eq("inexact? real", eval_to_string("(inexact? 3.0)"),    "TRUE");
+    check_eq("integer? 2.0",  eval_to_string("(integer? 2.0)"),    "TRUE");
+    check_eq("integer? 2.5",  eval_to_string("(integer? 2.5)"),    "FALSE");
+    check_eq("integer? inf",  eval_to_string("(integer? +inf.0)"), "FALSE");
+    check_eq("integer? str",  eval_to_string("(integer? \"x\")"),  "FALSE");
+    check_eq("rational? inf", eval_to_string("(rational? +inf.0)"), "FALSE");
+    check_eq("real? nan",     eval_to_string("(real? +nan.0)"),    "TRUE");
+    check_eq("e->i",          eval_to_string("(exact->inexact 1)"),   "1.0");
+    check_eq("i->e",          eval_to_string("(inexact->exact 2.0)"), "2");
+    // 大きい整数を実数にすると桁は落ちる（決定88）。落ちること自体が仕様
+    check_eq("e->i big",
+             eval_to_string("(exact->inexact (* 1125899906842624 1125899906842624))"),
+             "1.2676506002282294e30");
+    // 丸め: 正確な整数は恒等、実数は**実数のまま**。round は偶数丸め（決定93）
+    check_eq("floor exact",    eval_to_string("(floor 5)"),      "5");
+    check_eq("floor real",     eval_to_string("(floor 2.7)"),    "2.0");
+    check_eq("floor neg",      eval_to_string("(floor -2.5)"),   "-3.0");
+    check_eq("ceiling real",   eval_to_string("(ceiling 2.1)"),  "3.0");
+    check_eq("truncate neg",   eval_to_string("(truncate -2.7)"), "-2.0");
+    check_eq("round even 2.5", eval_to_string("(round 2.5)"),    "2.0");
+    check_eq("round even 3.5", eval_to_string("(round 3.5)"),    "4.0");
 
     check_eq("define",     eval_to_string("(define zz 1)"),       "zz");
     check_eq("set!",       eval_to_string("(define v 1) (set! v 2)"), "2");

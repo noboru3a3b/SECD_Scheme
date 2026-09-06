@@ -14,10 +14,12 @@
 ;;; 出たら、そのつど利用者と決めること。
 ;;;
 ;;; 凍結仕様（dev_memo.md §2）に合わせてあること:
-;;;   - 整数しかない。有理数・実数・複素数は無い（§2.2）
+;;;   - 数は正確な整数と不正確な実数の2階建て。有理数・複素数は無い（§2.2）
+;;;   - 算術は「一つでも不正確なら結果も不正確」（§2.3）。**ここに書く手続きは
+;;;     この伝播に乗るだけでよく、自分で正確さを判断しない**
 ;;;   - 文字は長さ1の文字列（§2.2）
 ;;;   - 真は #f 以外すべて。偽は #f ただ一つ
-;;;   - `/` は0方向への切り捨て、`modulo` の符号は除数に一致（§2.3）
+;;;   - **整数どうしの `/` は0方向への切り捨て**、`modulo` の符号は除数に一致（§2.3）
 ;;;
 ;;; 引数の誤りは `error` で §4.2 の形に揃えて報告する。見出しは
 ;;; 「<誰が>: <何がまずいか>」、値は irritant にして `given:` に出す。
@@ -28,21 +30,13 @@
 ;;; %exit を使っている。
 
 ;;; ---------------------------------------------------------------- 数
-;;; 整数しか無いので、R5RS の数値塔の述語はすべて「整数かどうか」に潰れる。
-;;; 嘘をつかない範囲で答える: 整数は有理数でも実数でも複素数でもある。
-
-(define integer?  (lambda (x) (number? x)))
-(define rational? (lambda (x) (number? x)))
-(define real?     (lambda (x) (number? x)))
-(define complex?  (lambda (x) (number? x)))
-
-;; 不正確な数が存在しないので、数ならば必ず正確。
-(define exact?
-  (lambda (x)
-    (if (number? x) #t (error "exact?: wrong type of argument" x))))
-(define inexact?
-  (lambda (x)
-    (if (number? x) #f (error "inexact?: wrong type of argument" x))))
+;;; 数は「正確な整数」と「不正確な実数」の2階建て（dev_memo.md §2.2）。
+;;;
+;;; **表現を見る手続きは C++ 側にある**（20日目の決定93）。
+;;; integer? / rational? / real? / complex? / exact? / inexact? /
+;;; exact->inexact / inexact->exact / floor / ceiling / truncate / round は
+;;; ここには無い。ここに置くのは「= や < や算術だけで書けるもの」に限る。
+;;; そうしておくと、正確さの伝播が算術1箇所で決まり、ここが嘘をつかない。
 
 (define zero?     (lambda (x) (= x 0)))
 (define positive? (lambda (x) (> x 0)))
@@ -53,6 +47,8 @@
 (define abs (lambda (x) (if (< x 0) (- 0 x) x)))
 
 ;; R5RS の max / min は1個以上の可変長。畳み込みは末尾再帰で書く（§4.3）。
+;; **21日目に直す**（決定93）。R5RS は「引数に不正確が1つでもあれば結果も
+;; 不正確」と決めているので、(max 2 1.0) は 2 ではなく 2.0 でなければならない。
 (define max
   (lambda (x . rest)
     (letrec ((go (lambda (acc ls)
@@ -95,7 +91,8 @@
                                (cdr ls)))))))
       (go 1 args))))
 
-;; 整数しか無いので負の指数は表せない。黙って 0 を返さずに知らせる。
+;; **21日目に直す**（決定93）。負の指数は 0.125 のような実数を返すようにする。
+;; いまはエラー。実数の底（(expt 2.0 3)）は伝播規則で既に 8.0 になる。
 (define expt
   (lambda (b n)
     (if (< n 0)
@@ -108,8 +105,8 @@
                                (/ n 2))))))
           (go 1 b n)))))
 
-;; 整数しか無いので**平方根の整数部**を返す（R5RS の「正確な数の平方根が
-;; 正確でなければ不正確な数を返す」は、不正確な数が無いので採れない）。
+;; **21日目に直す**（決定93）。正確な平方数なら正確な整数、そうでなければ
+;; %sqrt で実数を返すようにする。いまは正確な引数に対して**平方根の整数部**を返す。
 ;; ニュートン法。初期値を 1 以上に取って単調減少で止める。
 (define sqrt
   (lambda (x)
@@ -121,13 +118,6 @@
                            (let ((next (/ (+ g (/ x g)) 2)))
                              (if (< next g) (go next) g)))))
               (go (/ (+ x 1) 2)))))))
-
-;; 整数しか無いので、丸めはすべて恒等。R5RS の名前を受け付けること自体に
-;; 意味がある（他所から持ってきたコードがそのまま動く）。
-(define floor    (lambda (x) (if (number? x) x (error "floor: wrong type of argument" x))))
-(define ceiling  (lambda (x) (if (number? x) x (error "ceiling: wrong type of argument" x))))
-(define truncate (lambda (x) (if (number? x) x (error "truncate: wrong type of argument" x))))
-(define round    (lambda (x) (if (number? x) x (error "round: wrong type of argument" x))))
 
 ;;; -------------------------------------------------------------- リスト
 ;;; cdr 方向は末尾再帰で辿る（§4.3 の「cdr 方向を再帰で辿らない」と同じ趣旨。
