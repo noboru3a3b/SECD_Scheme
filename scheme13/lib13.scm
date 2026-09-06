@@ -25,9 +25,9 @@
 ;;; 「<誰が>: <何がまずいか>」、値は irritant にして `given:` に出す。
 ;;;
 ;;; **`%` で始まる名前は内部用**（決定60）。このファイルが使うためだけの口で、
-;;; 利用者が呼ぶものではない。ここで定義する %list-tail-checked のほか、
-;;; C++ 側の %values->list / %wind-push / %wind-pop / %wind-top-after /
-;;; %exit を使っている。
+;;; 利用者が呼ぶものではない。ここで定義するのは %isqrt / %list-tail-checked /
+;;; %map-1 / %map-n / %any-null? の5つ。C++ 側の %sqrt / %expt / %values->list /
+;;; %wind-push / %wind-pop / %wind-top-after / %exit を使っている。
 
 ;;; ---------------------------------------------------------------- 数
 ;;; 数は「正確な整数」と「不正確な実数」の2階建て（dev_memo.md §2.2）。
@@ -72,12 +72,11 @@
                            (cdr ls))))))
       (go x (inexact? x) rest))))
 
-;; quotient は0方向への切り捨て。`/` が既にそれ（§2.3）。
-(define quotient (lambda (x y) (/ x y)))
-
-;; remainder の符号は**被除数**に一致する。modulo（符号は除数に一致）とは
-;; 負の数で答えが違う: (remainder -7 2) は -1、(modulo -7 2) は 1。
-(define remainder (lambda (x y) (- x (* y (quotient x y)))))
+;; quotient / remainder はここに無い。**C++ 側のプリミティブである**
+;; （23日目の決定118）。22日目まではここで `/` の別名として定義していたが、
+;; `/` が実数を受けるようになった19日目に意味が変わり、(quotient 7.0 2) が
+;; 3.5 を返していた。整数だけを受けるものを、実数も受けるものの別名で
+;; 定義してはいけない。
 
 ;; gcd / lcm は引数0個も許す（R5RS: (gcd) は 0、(lcm) は 1）。
 (define gcd
@@ -148,6 +147,33 @@
 ;;; cdr 方向は末尾再帰で辿る（§4.3 の「cdr 方向を再帰で辿らない」と同じ趣旨。
 ;;; 末尾再帰なら VM のダンプも積まない）。
 
+;;; R5RS は c…r の合成を**4段まで**定める（全28個）。scheme13 は2段の4個
+;;; （C++ 側）と3段の8個（caar/cadr/cdar/cddr/caddr/cdddr が C++、残りは
+;;; system_lib.scm）まで持っていて、**4段の16個が無かった**。
+;;; 23日目に SICP 2.3.4（ハフマン符号木）で `cadddr` を踏んで見つかった
+;;; （決定117・119）。8日目の R5RS 不足の数え上げに入っていなかった。
+;;;
+;;; 定義は3段のものに1段かぶせるだけ。名前は**外側から**読む:
+;;; cadddr は (car (cdr (cdr (cdr x)))) であって、その逆ではない。
+
+(define caaaar   (lambda (x) (car (caaar x))))
+(define caaadr   (lambda (x) (car (caadr x))))
+(define caadar   (lambda (x) (car (cadar x))))
+(define caaddr   (lambda (x) (car (caddr x))))
+(define cadaar   (lambda (x) (car (cdaar x))))
+(define cadadr   (lambda (x) (car (cdadr x))))
+(define caddar   (lambda (x) (car (cddar x))))
+(define cadddr   (lambda (x) (car (cdddr x))))
+(define cdaaar   (lambda (x) (cdr (caaar x))))
+(define cdaadr   (lambda (x) (cdr (caadr x))))
+(define cdadar   (lambda (x) (cdr (cadar x))))
+(define cdaddr   (lambda (x) (cdr (caddr x))))
+(define cddaar   (lambda (x) (cdr (cdaar x))))
+(define cddadr   (lambda (x) (cdr (cdadr x))))
+(define cdddar   (lambda (x) (cdr (cddar x))))
+(define cddddr   (lambda (x) (cdr (cdddr x))))
+
+
 ;; 内側の go は k を減らしていくので、**報告するのは元の k** でなければ
 ;; ならない。減った途中の値を出すと、利用者が渡していない数が given: に出る。
 ;; who を引数に取るのも同じ理由で、list-ref から来たときに list-tail の
@@ -189,6 +215,39 @@
         (if (equal? x (car (car ls)))
             (car ls)
             (assoc x (cdr ls))))))
+
+;;; R5RS の `map` はリストを**何本でも**取り、最短のものに合わせて止まる。
+;;; system_lib.scm の `map` は1本しか取らない（`map-2` が別にある）。
+;;;
+;;; ここは **`define` ではなく `set!` である。** 起動時ライブラリの読み込みは
+;;; 定義済みの名前を持つ `define` を飛ばす（先に読んだ system_lib.scm が勝つ）
+;;; ので、`define` では届かない。既存資産の振る舞いを変えないという保証
+;;; （dev_memo.md §1.4-1）は、**1本のときは system_lib.scm の実装をそのまま
+;;; 呼ぶ**ことで守る。増えるのは2本以上の道だけである（決定119）。
+;;;
+;;; `map-2` はそのまま残す。既存資産が使っているかもしれず、消す理由が無い。
+;;; `for-each` は1本のままにしてある（R5RS は複数を許す。決定119 の保留）。
+
+(define %map-1 map)
+
+(define %map-n
+  (lambda (fn lss)
+    (if (%any-null? lss)
+        '()
+        (cons (apply fn (%map-1 car lss))
+              (%map-n fn (%map-1 cdr lss))))))
+
+(define %any-null?
+  (lambda (lss)
+    (if (null? lss)
+        #f
+        (if (null? (car lss)) #t (%any-null? (cdr lss))))))
+
+(set! map
+  (lambda (fn ls . more)
+    (if (null? more)
+        (%map-1 fn ls)
+        (%map-n fn (cons ls more)))))
 
 ;;; -------------------------------------------------------------- 文字列
 ;;; 文字は長さ1の文字列（§2.2）。だから (string "a" "b") は string-append。

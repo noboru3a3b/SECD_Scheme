@@ -376,6 +376,62 @@ A
 (list-ref '(a b c) 2)
 C
 
+;;; --- 4段の c…r（23日目の決定119）。R5RS は4段まで28個を定める。
+;;; 名前は**外側から**読む: cadddr は (car (cdr (cdr (cdr x))))。
+
+(cadddr '(1 2 3 4 5))
+4
+
+(cddddr '(1 2 3 4 5))
+(5)
+
+(caaaar '((((1 2) 3) 4) 5))
+1
+
+(cddddr '(1 2 3 4))
+NIL
+
+(cadar '((1 2 3) 4))
+2
+
+;;; 28個すべてが**定義されている**こと。2段4個 + 3段8個 + 4段16個。
+;;; 値を見ないのは、木の形ごとに辿れる組が違うため。ここで見たいのは名前の存在。
+
+(length (filter procedure?
+                (list caar cadr cdar cddr
+                      caaar caadr cadar caddr cdaar cdadr cddar cdddr
+                      caaaar caaadr caadar caaddr cadaar cadadr caddar cadddr
+                      cdaaar cdaadr cdadar cdaddr cddaar cddadr cdddar cddddr)))
+28
+
+;;; --- map はリストを何本でも取る（R5RS。23日目の決定119）。
+;;; 1本のときは system_lib.scm の実装をそのまま呼ぶので、既存資産は動かない。
+
+(map (lambda (x) (* x x)) '(1 2 3))
+(1 4 9)
+
+(map + '(1 2 3) '(10 20 30))
+(11 22 33)
+
+(map * '(1 2) '(3 4) '(5 6))
+(15 48)
+
+(map list '(a b) '(1 2))
+((A 1) (B 2))
+
+;;; 最も短いリストで止まる
+
+(map + '(1 2 3) '(10 20))
+(11 22)
+
+(map + '() '(1 2))
+NIL
+
+;;; map-2 は残してある（既存資産のため）
+
+(map-2 + '(1 2) '(3 4))
+(4 6)
+
 ;;; --- member / assoc は equal? で比べる（memq/assq は eq?）---
 
 (member 2 '(1 2 3))

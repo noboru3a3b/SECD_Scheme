@@ -111,6 +111,19 @@ TRUE                                               pass
 NIL                                                pass
 a                                                  pass
 c                                                  pass
+4                                                  pass
+(5)                                                pass
+1                                                  pass
+NIL                                                pass
+2                                                  pass
+28                                                 pass
+(1 4 9)                                            pass
+(11 22 33)                                         pass
+(15 48)                                            pass
+((a 1) (b 2))                                      pass
+(11 22)                                            pass
+NIL                                                pass
+(4 6)                                              pass
 (2 3)                                              pass
 FALSE                                              pass
 ((a) (b))                                          pass
@@ -152,5 +165,5 @@ NIL                                                pass
 (before after before after)                        pass
 (connect talk1 disconnect connect talk2 disconnect)  pass
 
-( total: 153  pass: 153  NG: 0 )
+( total: 166  pass: 166  NG: 0 )
 NIL

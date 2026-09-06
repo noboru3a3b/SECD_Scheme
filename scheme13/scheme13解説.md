@@ -1,8 +1,8 @@
-# scheme13 解説文書（v1.4）
+# scheme13 解説文書（v1.5）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
-対象は `scheme13/scheme13.cpp`（単一ファイル、5,249 行）と
-`scheme13/lib13.scm`（277 行）。
+対象は `scheme13/scheme13.cpp`（単一ファイル、5,318 行）と
+`scheme13/lib13.scm`（336 行）。
 
 `scheme12_debug`（`scheme12_bignum_boost_debug.cpp`）を、一貫した設計思想の
 もとで書き直したものである。**振る舞いは互換、設計は選び直した。**
@@ -32,6 +32,13 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
 出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
 
+> **v1.5 で追ったもの**: `quotient` / `remainder` を `lib13.scm` から
+> **プリミティブへ移した**（23日目の決定118）。**c…r の4段16個と、複数リストを
+> 取る `map`** を足した（決定119。第10.6節・第14.1節）。プリミティブと `lib13.scm` の
+> 個数（第10.1・10.3・10.6節）、互換性の内訳（第13.3節）、テストの件数
+> （第12章）、0除算のエラー（付録C.4）。
+> **SICP を教材にした実地確認**（`scheme13/sicp/`）を第12章に足した。
+>
 > **v1.4 で追ったもの**: **浮動小数点数**（18〜21日目）。値モデル（第2章）、
 > リーダ（第4章）、プリミティブ一覧と個数（第10章）、テストの件数（第12章）、
 > 互換性（第13章）、既知の制限（第14章）、エラー一覧（付録C）。
@@ -1252,15 +1259,15 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | 層 | 実体 | 個数 |
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
-| プリミティブ | C++ の関数ポインタ | 135 |
-| ライブラリ | Scheme で書かれた定義 | 61（`system_lib.scm` 33 + `lib13.scm` 28） |
+| プリミティブ | C++ の関数ポインタ | 137 |
+| ライブラリ | Scheme で書かれた定義 | 78（`system_lib.scm` 33 + `lib13.scm` 45） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **224 個**の大域名が起動時に定義される。数え方:
+合計 **243 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 224
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 135
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 243
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 137
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
@@ -1284,7 +1291,7 @@ let  let*  letrec  and  or  cond  case  do  quasiquote
 **値としては特殊形式オブジェクト**として大域に束縛されている。
 `(procedure? call/cc)` が `FALSE` なのはこのため。
 
-### 10.3 プリミティブ（135）
+### 10.3 プリミティブ（137）
 
 ```cpp
 using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
@@ -1295,7 +1302,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 
 | 分類 | 名前 |
 | --- | --- |
-| 算術 | `+` `-` `*` `/` `modulo` |
+| 算術 | `+` `-` `*` `/` `quotient` `remainder` `modulo` |
 | 比較 | `=` `<` `>` `<=` `>=` |
 | 正確さ | `exact?` `inexact?` `integer?` `rational?` `real?` `complex?` `exact->inexact` `inexact->exact` |
 | 丸め | `floor` `ceiling` `truncate` `round` |
@@ -1346,7 +1353,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | ファイル | 中身 | 所有 |
 | --- | --- | --- |
 | `system_lib.scm` | `map` `filter` `for-each` `fold-left` `fold-right` `reverse` `memv` `assv` `caaar` 系、遅延評価（`delay`/`force`）、キュー、素数、その他 | **scheme12 と共有。触らない** |
-| `scheme13/lib13.scm` | R5RS にあって scheme13 に無かったもの（26 個）＋ `exit` / `quit` | scheme13 |
+| `scheme13/lib13.scm` | R5RS にあって scheme13 に無かったもの（45 個）＋ `exit` / `quit` | scheme13 |
 
 **順序に意味がある。** `load_library_dedup` は定義済みの名前を飛ばすので、
 先に読んだほうが勝つ。`system_lib.scm` を先に読むことで、**既存資産の
@@ -1362,7 +1369,14 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 理由づけ自体は正しい（C++ のループフレームは継続に素通りされない）ので、
 **将来これらをプリミティブ化しようとするときは、この点を思い出すこと。**
 
-### 10.6 lib13.scm（28）
+`map` だけは `lib13.scm` が **`set!` で拡張している**（23日目の決定119）。
+R5RS の `map` はリストを何本でも取るが、`system_lib.scm` のものは1本しか
+取らない。読み込みは定義済みの名前を持つ `define` を飛ばすので `define` では
+届かず、`set!` で置き換えるしかない。**1本のときは `system_lib.scm` の実装を
+`%map-1` として保持したまま呼ぶ**ので、既存資産の振る舞いは変わらない
+（ゴールデン24件が1バイトも動かないことで確かめてある）。
+
+### 10.6 lib13.scm（45）
 
 入れる基準は **「R5RS にあって scheme13 に無いもの」の一本**。
 `sort` / `reduce` / `string-upcase` のような便利な非標準手続きは入れない
@@ -1371,8 +1385,9 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | 分類 | 名前 |
 | --- | --- |
 | 数値述語 | `zero?` `positive?` `negative?` `even?` `odd?` |
-| 算術 | `abs` `max` `min` `quotient` `remainder` `gcd` `lcm` `expt` `sqrt` |
+| 算術 | `abs` `max` `min` `gcd` `lcm` `expt` `sqrt` |
 | リスト | `list-tail` `list-ref` `member` `assoc` |
+| c…r の4段（16） | `caaaar` `caaadr` `caadar` `caaddr` `cadaar` `cadadr` `caddar` `cadddr` `cdaaar` `cdaadr` `cdadar` `cdaddr` `cddaar` `cddadr` `cdddar` `cddddr` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
 | 多値・動的拡張 | `call-with-values` `dynamic-wind` |
 | 終了 | `exit` `quit`（**R5RS 外**。第10.11節） |
@@ -1857,13 +1872,13 @@ NIL
 4つの層がある。**セクションに手を入れたら3つ全部を通すこと。**
 
 ```sh
-make -C scheme13 selftest   # 150 checks — 凍結仕様との突き合わせ（C++ 単体）
+make -C scheme13 selftest   # 276 checks — 凍結仕様との突き合わせ（C++ 単体）
 make -C scheme13 compare    #  15 passed — 構文展開が scheme12 と等価か
 make -C scheme13 test       #  24 passed — 既存 .scm 資産との互換性（受け入れ基準）
 make -C scheme13 bench      # 呼び出し性能
 ```
 
-### 12.1 --selftest（265項目）
+### 12.1 --selftest（276項目）
 
 処理系を C++ 単体で検査する。**起動時ライブラリを読む前に走る**ので、
 ここで見られるのは処理系そのものだけである。
@@ -1890,7 +1905,7 @@ make -C scheme13 bench      # 呼び出し性能
 | ファイル | 例外の理由 |
 | --- | --- |
 | `test-case6.scm` | scheme13 でテスト機構を復活させたため、出力そのものが別物 |
-| `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト（**153項目**）。scheme12 に比べる相手が無い |
+| `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト（**166項目**）。scheme12 に比べる相手が無い |
 | `scheme13/tests/port_test.scm` | 同上（ポート。第10.9節） |
 | `scheme13/tests/exit_test.scm` | 同上（`exit`。第10.11節） |
 | `scheme13/tests/macro_print_test.scm` | 同上（`macro-print`。第11.4節） |
@@ -1968,6 +1983,34 @@ S 式を期待値として読み、照合して結果を印字する。** `(test
 scheme12 に渡しているので、**`NIL` / `TRUE` / `FALSE` という名前の
 シンボルを含むフォームは扱えない。**
 
+### 12.5 SICP を教材にした実地確認（697項目）
+
+```sh
+scheme13/sicp/run_sicp.sh          # 18 passed, 0 failed（主張 697 件）
+```
+
+教科書 *Structure and Interpretation of Computer Programs* を1章ずつ読み、
+その章の題材を書いて動かす。**「教科書の Scheme が書き写したまま動く処理系か」を
+外から問う**もので、上の4つとは役割が違う。ゴールデン（第12.2節）が
+「scheme12 と1バイトも違わないこと」を見るのに対し、こちらは
+**処理系として普通かどうか**を見る。
+
+| 章 | 主張 | 主に効くところ |
+| --- | --- | --- |
+| 第1章（1.1〜1.3） | 135 | 実数の演算と印字。**期待値は書籍が本文に印字している数**で、`(integral cube 0 1 0.001)` が `0.249999875000001` になるところまで一致する |
+| 第2章（2.1〜2.5） | 260 | 対と木、シンボル、高階手続き、`set!` による表。有理数・複素数・多項式は**無い型を対とタグで自分で作る**章なので、型が無いことがむしろ題材と噛み合う |
+| （2.1.4 演習2.10） | 1 | **エラーで止まること自体の主張。** Scheme レベルの例外捕捉が無い（第14.2節）ので、`*_error.scm` を別ファイルにして終了状態と文面をランナーが見る |
+| 第4章（4.1〜4.4） | 104 | **Scheme で書いた Scheme を scheme13 の上で動かす。** 超循環評価器・遅延評価器・`amb` 評価器・質問システムの4つ。被解釈言語の1万回ループが通ることが、**相互再帰を通しても末尾呼び出しが保たれる**証拠になる |
+| 第3章（3.1〜3.3・3.5） | 197 | 局所状態と `set!`、環境モデル、`set-car!` / `set-cdr!` と共有・環、キューと表、**論理回路（議事日程つき）と制約の伝播**、そして**ストリーム**。3.5 は `delay` / `force` が**値を覚える**ことに全面的に依存する（第10章）。3.4（並行性）は並行機構が無いので対象外 |
+
+23日目に第1章から第4章までを通した。**そこで見つかった不具合が
+`quotient` / `remainder` の実数（決定118。付録C.4）と、
+4段の `c…r` と複数リストの `map`（決定119。第14.1節）である。**
+第3章では処理系側の不具合は出ていない。
+`selftest` もゴールデンも**開発側が思いつく使い方しか通らない**ので、
+外から来た題材でしか見つからない穴がある。結果と分かったことは
+`scheme13/sicp/README.md` にある。
+
 ---
 
 ## 13. scheme12 との互換性
@@ -1979,7 +2022,7 @@ scheme12 に渡しているので、**`NIL` / `TRUE` / `FALSE` という名前�
 | 大域名 | **差ゼロ**（scheme12 の 156 個すべてあり） | `(globals)` の集合を `comm` |
 | 既存 `.scm` 資産の出力 | **11/12 がバイト単位で一致**（浮動小数点数を入れた18〜21日目も動いていない） | ゴールデン |
 | 構文・マクロ展開 | 15件一致 | `make compare` |
-| 凍結仕様 §2 | 265項目で固定 | `make selftest` |
+| 凍結仕様 §2 | 276項目で固定 | `make selftest` |
 
 名前の集合を測る手順（主張するなら必ずこれで測ること。
 `dev_memo.md` 決定40）:
@@ -2031,10 +2074,12 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 ### 13.3 上位互換であること
 
-scheme13 は **224 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **243 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
-差分の 68 個: `lib13.scm` の 28 個 + 数の 22 個（第10.3節の「正確さ」「丸め」
+差分の 87 個: `lib13.scm` の 45 個（うち c…r の4段16個と `map` の内部名3つは
+23日目。決定119）+ `quotient` / `remainder`（23日目に `lib13.scm` から
+プリミティブへ移した。決定118）+ 数の 22 個（第10.3節の「正確さ」「丸め」
 「超越関数」。18〜21日目）+ `error` + `macroexpand-1` + `macroexpand` +
 `test-start` + `test-end` + ポートの 6 個（`current-input-port`
 `current-output-port` `input-port?` `output-port?` `peek-char` `char-ready?`）
@@ -2046,7 +2091,7 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ### 13.4 証拠の範囲
 
-一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 265 項目**で、
+一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 276 項目**で、
 証明ではない。とくに、**既存資産はどれもエラーを踏まずに走りきる**ので、
 ゴールデンが押さえているのは「正常に走るプログラムの出力」だけである。
 エラー経路の互換性は測っていない（意図的に変えたので、測る意味も薄い）。
@@ -2119,6 +2164,20 @@ R5RS はそれらを不正確な有理数に対しても定義しているので
 | `with-input-from-file` / `with-output-to-file` | 同上 |
 
 ファイル入出力の便宜手続きは、8日目の数え上げに入っていなかったものである。
+
+**8日目の数え上げは、ほかにも2つ取りこぼしていた**（23日目に SICP 第2章で
+判明。決定117・119）。どちらも同じ日に埋めた:
+
+- **c…r の合成の4段 16個**（`cadddr` など）。R5RS は4段まで28個を定める。
+  持っていたのは2段4個と3段8個だけだった
+- **`map` の複数リスト**。R5RS の `map` はリストを何本でも取り、最短で止まる。
+  `system_lib.scm` の `map` は1本だけで、2本用の `map-2` が別にあった
+
+**取りこぼしの共通点は「名前はあるが仕様の一部が欠けている」形**である。
+`(globals)` の名前を突き合わせる測り方（第10.1節）はこれを見つけられない。
+`map` は名前として存在していたし、`cadddr` は**名前の一覧を作るとき
+`caar` 系をまとめて1行に書いていた**ので、16個足りないことに気づけなかった。
+`for-each` の複数リストは**まだ無い**（同じ理由で残っている。決定119）。
 
 | 名前 | いま何が要るか |
 | --- | --- |
@@ -2447,7 +2506,18 @@ Fatal error: t.scm:1:1: vector-ref: wrong type of argument
   given: 1.0
     (vector-ref (vector 1 2) 1.0)
     ^
+
+Fatal error: t.scm:1:1: quotient: wrong type of argument
+  expected: an integer
+  given: 7.0
+    (quotient 7.0 2)
+    ^
 ```
+
+`quotient` / `remainder` / `modulo` の三つは**実数を弾く**（決定92）。
+`/` は受ける（`(/ 7.0 2)` は `3.5`）。22日目まで `quotient` は `lib13.scm` で
+`/` の別名だったため、実数を渡すと黙って実数除算になっていた
+（`(quotient 7.0 2)` が `3.5`）。23日目にプリミティブへ移して直した（決定118）。
 
 ### C.2 引数の数が違う
 
@@ -2501,7 +2571,29 @@ Fatal error: t.scm:1:1: inexact->exact: argument out of range
 `inexact->exact` が範囲の誤りなのは、**有理数が無いので `2.5` に対応する
 正確な数が存在しない**ためである（決定93）。黙って切り捨てない。
 
-### C.4 構文
+### C.4 0除算
+
+```
+Fatal error: t.scm:1:1: /: division by zero
+  given: 0
+    (/ 1 0)
+    ^
+
+Fatal error: t.scm:1:1: quotient: division by zero
+  given: 0
+    (quotient 1 0)
+    ^
+```
+
+**見出しは呼ばれた手続きの名前**である。`quotient` / `remainder` / `modulo` は
+それぞれ自分の名前を出す。22日目まで `quotient` は `lib13.scm` で `/` の
+別名だったため、`(quotient 1 0)` が `/` の名前で落ちていた（決定118）。
+
+0除算が誤りなのは**整数どうしのとき**だけである。実数が混ざれば IEEE 754 に
+従って `+inf.0` / `-inf.0` / `+nan.0` を返し、例外にしない（第4章）。
+`(/ 1 0.0)` は `+inf.0`、`(/ 0.0 0.0)` は `+nan.0`。
+
+### C.5 構文
 
 ```
 Fatal error: t.scm:1:1: bad syntax in let
@@ -2525,7 +2617,7 @@ Fatal error: t.scm:1:1: bad syntax in define
 `given:` には**悪い部分そのもの**が出る。散文の詳細も許すが、値が手元に
 あるなら `expected:` / `given:` にする。
 
-### C.5 名前と呼び出し
+### C.6 名前と呼び出し
 
 ```
 Fatal error: t.scm:1:1: unbound variable: nosuch
@@ -2540,7 +2632,7 @@ Fatal error: t.scm:1:1: attempt to call a non-procedure
     ^
 ```
 
-### C.6 ライブラリから
+### C.7 ライブラリから
 
 ```
 Fatal error: t.scm:1:1: sqrt: argument out of range
@@ -2551,7 +2643,7 @@ Fatal error: t.scm:1:1: sqrt: argument out of range
 
 **`lib13.scm` の中を指していない**ことに注目（第3.4節）。
 
-### C.7 内部エラー
+### C.8 内部エラー
 
 ```
 internal error: as_pair on a non-pair

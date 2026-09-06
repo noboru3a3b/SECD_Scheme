@@ -6,18 +6,22 @@
 // セクション構造は dev_memo.md §3 に固定されている。新しいコードを
 // 「とりあえず近くに」置かない。該当セクションがなければセクションごと作る。
 //
-//   1. 依存と GC 設定
-//   2. ソース位置とエラー
-//   3. 値モデル
-//   4. 表示
-//   5. リーダ
-//   6. 構文検査        （未着手）
-//   7. 構文展開        （未着手）
-//   8. コンパイラ      （未着手）
-//   9. 命令セット      （未着手）
-//  10. VM              （未着手）
-//  11. プリミティブ    （未着手）
-//  12. 起動            （暫定：自己テストのみ）
+//   1. 依存と GC 設定      インクルード、GC_DECLARE_PTRFREE、GcString、アロケータ別名
+//   2. ソース位置とエラー  SourcePos、位置つきエラー例外、エラー本文の形
+//   3. 値モデル            Object と各型、即値 fixnum、構築・述語・アクセサ
+//   4. 表示                to_string / display / write、循環検出、実数の表示
+//   5. リーダ              トークナイザ、S式パーサ（位置を記録する）
+//   6. 構文検査            syntax_error / check_arity / check_bindings
+//   7. 構文展開            let/let*/letrec/and/or/cond/case/do/quasiquote
+//   8. コンパイラ          命令生成、環境解決、内部 define の scan out
+//   9. 命令セット          Op と Instruction、逆アセンブル表示
+//  10. VM                  実行ループ、呼び出し、継続、トレース
+//  11. プリミティブ        算術・リスト・述語・文字列・ベクタ・I/O・GC・デバッグ
+//  12. 起動                大域の初期化、ライブラリ読み込み、自己テスト、REPL、main
+//
+// **ファイル上だけは 9 が 8 の前にある。** コンパイラが Op / Instruction /
+// Template / GlobalCell を使うので、C++ の宣言順としてそうなる（§6 の5日目）。
+// dev_memo.md §3 の並びが正で、ここが例外であることをセクション8 にも書いてある。
 
 // ===========================================================================
 // セクション 1. 依存と GC 設定
@@ -2400,8 +2404,8 @@ struct VM {
     // 位置の無いエラーに、どこを指させるか（決定43）。
     //
     // 素直には「いま実行中の命令」だが、それが起動時ライブラリの中だと
-    // `(sqrt -4)` が lib13.scm の 107 行目を指す。**利用者はその行を
-    // 書いていないので直しようがない。** そこで、実行中の位置が
+    // `(sqrt -4)` が lib13.scm の中（`sqrt` が `error` を呼ぶ行）を指す。
+    // **利用者はその行を書いていないので直しようがない。** そこで、実行中の位置が
     // ライブラリの中なら、ダンプを内側から外へ辿って**最初に見つかる
     // ライブラリ外の呼び出し位置**を選ぶ。全部ライブラリなら諦めて
     // 実行中の位置を返す（ライブラリ同士の呼び出しなど）。
@@ -2926,6 +2930,33 @@ static ValuePtr prim_div(ValuePtr* a, std::size_t n) {
         acc /= d;
     }
     return make_int(acc);
+}
+
+// `quotient` / `remainder` は**整数だけを受ける**（決定92）。0方向への切り捨てと、
+// 被除数に符号を合わせた剰余。
+//
+// **`/` の別名にしない**（23日目の決定118）。22日目まで `lib13.scm` が
+// `(define quotient (lambda (x y) (/ x y)))` と書いていたが、これは
+// 「整数どうしの `/` は切り捨て」という §2.3 の一行に寄りかかった定義で、
+// 19日目に `/` が実数を受けるようになった瞬間に意味が変わった
+// （`(quotient 7.0 2)` が `3.5` を返していた）。**別の意味のものを別名で
+// 定義すると、指した先が広がったときに黙って壊れる。**
+static ValuePtr prim_quotient(ValuePtr* a, std::size_t n) {
+    need_args("quotient", n, 2, 2);
+    BigInt x = num_of(a[0], "quotient");
+    BigInt y = num_of(a[1], "quotient");
+    if (y == 0) prim_error("quotient", "division by zero" + detail("given", to_string(a[1])));
+    return make_int(BigInt(x / y));
+}
+
+// 剰余の符号は**被除数**に一致する。modulo（符号は除数に一致）とは
+// 負の数で答えが違う: (remainder -7 2) は -1、(modulo -7 2) は 1。
+static ValuePtr prim_remainder(ValuePtr* a, std::size_t n) {
+    need_args("remainder", n, 2, 2);
+    BigInt x = num_of(a[0], "remainder");
+    BigInt y = num_of(a[1], "remainder");
+    if (y == 0) prim_error("remainder", "division by zero" + detail("given", to_string(a[1])));
+    return make_int(BigInt(x % y));
 }
 
 // 剰余の符号は除数に一致する（§2.3）
@@ -4039,6 +4070,7 @@ static void init_globals() {
     struct Entry { const char* name; PrimitiveFn fn; };
     static const Entry table[] = {
         {"+", prim_add}, {"-", prim_sub}, {"*", prim_mul}, {"/", prim_div},
+        {"quotient", prim_quotient}, {"remainder", prim_remainder},
         {"modulo", prim_modulo},
         {"=", prim_num_eq}, {"<", prim_lt}, {">", prim_gt},
         {"<=", prim_le}, {">=", prim_ge},
@@ -4740,6 +4772,26 @@ static void selftest_errors() {
              eval_error_body("(length (cons 1 2))"),
              "length: wrong type of argument\n  expected: a proper list\n  given: (1 . 2)");
 
+    // 整数を要求する三つは、実数を**弾く**（決定92・118）。`/` は受ける。
+    // 22日目まで quotient / remainder は `/` の別名だったので、実数を渡すと
+    // 黙って実数除算になっていた（(quotient 7.0 2) が 3.5）。その回帰。
+    check_eq("quotient rejects flonum",
+             eval_error_body("(quotient 7.0 2)"),
+             "quotient: wrong type of argument\n  expected: an integer\n  given: 7.0");
+    check_eq("remainder rejects flonum",
+             eval_error_body("(remainder 7 2.0)"),
+             "remainder: wrong type of argument\n  expected: an integer\n  given: 2.0");
+    check_eq("modulo rejects flonum",
+             eval_error_body("(modulo 7.0 2)"),
+             "modulo: wrong type of argument\n  expected: an integer\n  given: 7.0");
+    // 0除算は、`/` ではなく**自分の名前**を出す
+    check_eq("quotient by zero",
+             eval_error_body("(quotient 1 0)"),
+             "quotient: division by zero\n  given: 0");
+    check_eq("remainder by zero",
+             eval_error_body("(remainder 1 0)"),
+             "remainder: division by zero\n  given: 0");
+
     // クロージャの引数不足は**呼ばれた側の名前**を出す（§8 の1番目）
     check_eq("arity names the callee",
              eval_error_body("(define (f a b) a) (f 1)"),
@@ -4918,6 +4970,19 @@ static void selftest_eval() {
     check_eq("div trunc",  eval_to_string("(/ -7 2)"),            "-3");
     check_eq("modulo neg", eval_to_string("(modulo -7 2)"),       "1");
     check_eq("modulo pos", eval_to_string("(modulo 7 -2)"),       "-1");
+
+    // quotient / remainder は 23日目にプリミティブへ移した（決定118）。
+    // **remainder の符号は被除数、modulo の符号は除数**。ここが二つの違い。
+    check_eq("quotient trunc",  eval_to_string("(quotient -7 2)"),   "-3");
+    check_eq("quotient pos",    eval_to_string("(quotient 7 2)"),    "3");
+    check_eq("remainder neg",   eval_to_string("(remainder -7 2)"),  "-1");
+    check_eq("remainder pos",   eval_to_string("(remainder 7 -2)"),  "1");
+    check_eq("quotient bignum",
+             eval_to_string("(quotient 100000000000000000000 3)"),   "33333333333333333333");
+    // bignum で割っても、収まったら fixnum に落ちる（§9 の規律1）
+    check_eq("quotient normalizes",
+             eval_to_string("(eq? (quotient 100000000000000000000 100000000000000000000) 1)"),
+             "TRUE");
 
     // --- 実数（20日目）------------------------------------------------------
     // 伝播規則: 一つでも不正確なら結果も不正確（決定91）
