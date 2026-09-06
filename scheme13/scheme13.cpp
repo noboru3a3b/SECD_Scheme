@@ -25,10 +25,13 @@
 
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <charconv>
 #include <climits>
 #include <optional>
 #include <random>
@@ -306,7 +309,7 @@ using ValueVec = GcVec<ValuePtr>;
 
 enum class Tag : std::uint8_t {
     Fixnum,       // ヘッダを持たない即値。tag_of() だけが返す
-    Nil, Boolean, Bignum, String, Symbol, Pair, Vector,
+    Nil, Boolean, Bignum, Flonum, String, Symbol, Pair, Vector,
     Closure, Continuation, Primitive, Macro, SpecialForm, Port, Eof, Values
 };
 
@@ -374,6 +377,16 @@ struct Vector : Object {
 struct Bignum : Object {       // fixnum に収まらない整数だけがここに来る
     BigInt v;
     explicit Bignum(const BigInt& n) : Object(Tag::Bignum), v(n) {}
+};
+
+// 不正確な実数（18日目の決定81）。数は「正確な整数」と「不正確な実数」の
+// 2階建てで、有理数と複素数は無い。
+//
+// **即値にはしない**（決定84）。64ビットの double は、最下位1ビットをタグに
+// 使う即値方式に入らない。確保は make_flonum() ただ一つを通すこと。
+struct Flonum : Object {
+    double v;
+    explicit Flonum(double d) : Object(Tag::Flonum), v(d) {}
 };
 
 // クロージャの「コンパイル時に決まる側」。lambda 1つにつき1個だけ作り、
@@ -523,6 +536,15 @@ static ValuePtr make_int_from_text(const std::string& digits) {
     return make_int(BigInt(digits));
 }
 
+// 実数はポインタを1つも持たないので、**走査しないヒープから確保する**
+// （18日目の決定84）。double のビット列を保守的 GC がポインタと誤解して
+// 掴み続けるのを防ぐ。§1.6-4 の cpp_int の limb 配列と同じ趣旨。
+//
+// **結果が整数でも整数に落とさない**（決定85）。正確さは値の一部で、
+// (* 2.0 3.0) は 6.0 であって 6 ではない。make_int が表現を1つに正規化するのと
+// **向きが逆**なので、あちらの感覚でここを触らないこと。
+static inline ValuePtr make_flonum(double d) { return new (PointerFreeGC) Flonum(d); }
+
 static inline ValuePtr make_string(std::string_view s) { return new Str(to_gc(s)); }
 
 // キーは Symbol 自身が持つバッファを指す string_view。名前を二重に持たずに済み、
@@ -581,7 +603,11 @@ static inline bool is_pair(ValuePtr v)    { return has_tag(v, Tag::Pair); }
 static inline bool is_string(ValuePtr v)  { return has_tag(v, Tag::String); }
 static inline bool is_vector(ValuePtr v)  { return has_tag(v, Tag::Vector); }
 static inline bool is_symbol(ValuePtr v)  { return has_tag(v, Tag::Symbol); }
-static inline bool is_number(ValuePtr v)  { return is_fixnum(v) || has_tag(v, Tag::Bignum); }
+static inline bool is_flonum(ValuePtr v)  { return has_tag(v, Tag::Flonum); }
+// 正確な整数（fixnum か Bignum）。**実数と区別したいところはこちらを使う**。
+// number? が真でも整数とは限らない（18日目の決定86・92）。
+static inline bool is_exact_int(ValuePtr v) { return is_fixnum(v) || has_tag(v, Tag::Bignum); }
+static inline bool is_number(ValuePtr v)  { return is_exact_int(v) || is_flonum(v); }
 
 // 偽なのは #f ただ一つ。nil も 0 も空文字列も真。（dev_memo.md §2）
 static inline bool is_false(ValuePtr v) { return v == g_false; }
@@ -685,6 +711,43 @@ using PathSet = std::unordered_set<const void*, std::hash<const void*>,
                                    std::equal_to<const void*>,
                                    gc_allocator<const void*> >;
 
+// 実数の表示（18日目の決定90）。**読み戻すと同じ値になる最短形**を出す。
+// std::to_chars の shortest round-trip に、Scheme の形へ寄せる後処理をかける:
+//
+//   to_chars   scheme13   直し方
+//   1          1.0        '.' も 'e' も無ければ ".0" を足す（-0 → -0.0 も同じ規則）
+//   1e+21      1e21       指数の '+' を落とす
+//   1e-07      1e-7       指数の先頭の 0 を落とす
+//
+// 無限大と非数は to_chars に渡さず、R7RS の綴りで出す。
+//
+// **丸めて隠さない。** (+ 0.1 0.2) は 0.30000000000000004 と出る。§1.5 に
+// 照らせば、見えている数がメモリにある数であることのほうが大事である。
+// **number->string もこの関数を使う**（書式を2つ持たない）。
+static std::string format_flonum(double d) {
+    if (std::isnan(d)) return "+nan.0";
+    if (std::isinf(d)) return (d > 0) ? "+inf.0" : "-inf.0";
+
+    char buf[64];
+    auto r = std::to_chars(buf, buf + sizeof buf, d);
+    std::string s(buf, r.ptr);
+
+    std::size_t e = s.find_first_of("eE");
+    if (e == std::string::npos) {
+        if (s.find('.') == std::string::npos) s += ".0";
+        return s;
+    }
+    std::string mantissa = s.substr(0, e);
+    std::string exponent = s.substr(e + 1);
+    bool neg = false;
+    if (!exponent.empty() && (exponent[0] == '+' || exponent[0] == '-')) {
+        neg = (exponent[0] == '-');
+        exponent.erase(0, 1);
+    }
+    while (exponent.size() > 1 && exponent[0] == '0') exponent.erase(0, 1);
+    return mantissa + "e" + (neg ? "-" : "") + exponent;
+}
+
 static void write_value(std::string& out, ValuePtr v, PathSet& path);
 
 static void write_list(std::string& out, ValuePtr ls, PathSet& path) {
@@ -747,6 +810,9 @@ static void write_value(std::string& out, ValuePtr v, PathSet& path) {
             return;
         case Tag::Bignum:
             out += static_cast<Bignum*>(v)->v.str();
+            return;
+        case Tag::Flonum:
+            out += format_flonum(static_cast<Flonum*>(v)->v);
             return;
         case Tag::Nil:
             out += "NIL";
@@ -861,6 +927,77 @@ static bool is_delimiter(char c) {
     return std::isspace(static_cast<unsigned char>(c)) ||
            c == '(' || c == ')' || c == '\'' || c == '`' ||
            c == ',' || c == '"' || c == ';';
+}
+
+// トークンを数に変える。**「数かどうか」の判定は自前でやる**（18日目の決定89）。
+//
+// std::from_chars に判定まで任せてはいけない。libstdc++ のそれは `inf` / `nan` /
+// `infinity` を受け付けるので、任せるとシンボル `inf` が数に化ける（実測）。
+// 受け付ける形は dev_memo.md §2.5 に固定してあり、**トークン全体が一致した
+// ときだけ数**になる。外れたもの（`1/2` `1.2.3` `1e`）はシンボルのまま。
+//
+// **リーダと string->number の両方がこれを使う。** 数の文法を2つ持たない。
+static bool parse_number(std::string_view tok, ValuePtr* out) {
+    if (tok.empty()) return false;
+
+    if (tok == "+inf.0" || tok == "-inf.0") {
+        *out = make_flonum(tok[0] == '-' ? -INFINITY : INFINITY);
+        return true;
+    }
+    if (tok == "+nan.0" || tok == "-nan.0") { *out = make_flonum(NAN); return true; }
+
+    auto digit = [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; };
+
+    std::size_t i = 0;
+    if (tok[0] == '+' || tok[0] == '-') i = 1;
+
+    std::size_t int_digits = 0, frac_digits = 0;
+    while (i < tok.size() && digit(tok[i])) { ++i; ++int_digits; }
+
+    bool real = false;
+    if (i < tok.size() && tok[i] == '.') {
+        real = true;
+        ++i;
+        while (i < tok.size() && digit(tok[i])) { ++i; ++frac_digits; }
+    }
+    if (int_digits == 0 && frac_digits == 0) return false;   // 数字が1つも無い（`.` `+` `-`）
+
+    if (i < tok.size() && (tok[i] == 'e' || tok[i] == 'E')) {
+        std::size_t j = i + 1;
+        if (j < tok.size() && (tok[j] == '+' || tok[j] == '-')) ++j;
+        std::size_t exp_digits = 0;
+        while (j < tok.size() && digit(tok[j])) { ++j; ++exp_digits; }
+        if (exp_digits == 0) return false;                   // `1e` はシンボル
+        i = j;
+        real = true;
+    }
+    if (i != tok.size()) return false;                       // 末尾が残ったらシンボル（`1.2.3`）
+
+    // 整数。**先頭の '+' は落としてから渡す。** BigInt("+5") は Boost が
+    // "Unexpected character encountered in input." を投げ、Scheme のエラーに
+    // ならずに処理系ごと落ちる（19日目の決定99 で見つけた既存の不具合）。
+    if (!real) {
+        std::string_view digits = (tok[0] == '+') ? tok.substr(1) : tok;
+        *out = make_int_from_text(std::string(digits));
+        return true;
+    }
+
+    // ここまで来たトークンは §2.5 の文法に一致している。**変換だけ**を任せる。
+    // from_chars は先頭の '+' を受け付けないので落としてから渡す（実測）。
+    std::string body(tok);
+    if (body[0] == '+') body.erase(0, 1);
+    double d = 0;
+    auto r = std::from_chars(body.data(), body.data() + body.size(), d);
+    if (r.ptr != body.data() + body.size()) return false;    // 起きないはずだが黙って通さない
+    if (r.ec == std::errc::result_out_of_range) {
+        // 桁あふれ・桁不足。from_chars は値を書かずに帰るので、±inf / ±0.0 への
+        // 丸めは strtod に任せる（判定は済んでいるので、任せるのは変換だけ）。
+        d = std::strtod(body.c_str(), nullptr);
+    } else if (r.ec != std::errc()) {
+        return false;
+    }
+    *out = make_flonum(d);
+    return true;
 }
 
 struct Reader {
@@ -1029,6 +1166,9 @@ struct Reader {
 
     // アトムは位置を持たない（シンボルはインターンされて共有され、fixnum は
     // 即値なのでヘッダが無い）。エラーは囲みのペアの位置を使う。
+    //
+    // 実数はヘッダを持つので位置を貼れるが、**貼らない**（19日目の決定98）。
+    // 貼っても引かれる場所が無く、アトムの扱いを1つだけ変えることになる。
     ValuePtr read_atom(const SourcePos& start) {
         std::string tok;
         while (!done() && !is_delimiter(peek())) tok += advance();
@@ -1038,15 +1178,8 @@ struct Reader {
         if (tok == "true")  return g_true;
         if (tok == "false") return g_false;
 
-        bool signed_head = (tok[0] == '-' || tok[0] == '+');
-        bool numeric = std::isdigit(static_cast<unsigned char>(tok[0])) ||
-                       (signed_head && tok.size() > 1);
-        if (numeric) {
-            for (std::size_t i = signed_head ? 1 : 0; i < tok.size(); ++i) {
-                if (!std::isdigit(static_cast<unsigned char>(tok[i]))) { numeric = false; break; }
-            }
-            if (numeric) return make_int_from_text(tok);
-        }
+        ValuePtr num = nullptr;
+        if (parse_number(tok, &num)) return num;
         return make_symbol(tok);
     }
 };
@@ -1887,11 +2020,11 @@ static ValuePtr macro_expand_1_expr(ValuePtr expr) {
     return with_pos_of(out, expr);
 }
 
-// 自己評価する値か（scheme12 と同じ判定）
+// 自己評価する値か（scheme12 と同じ判定。実数は19日目に足した）
 static bool is_self_evaluating(ValuePtr v) {
     switch (tag_of(v)) {
         case Tag::Nil: case Tag::Boolean: case Tag::Fixnum:
-        case Tag::Bignum: case Tag::String: case Tag::Vector:
+        case Tag::Bignum: case Tag::Flonum: case Tag::String: case Tag::Vector:
             return true;
         default:
             return false;
@@ -2872,11 +3005,28 @@ static ValuePtr prim_append(ValuePtr* a, std::size_t n) {
     return out;
 }
 
+// 数の eqv?。**正確さが一致して初めて真**（18日目の決定86）。
+// (= 1 1.0) は真だが (eqv? 1 1.0) は偽。実数どうしはビット列で比べるので
+// (eqv? 0.0 -0.0) は偽、(eqv? +nan.0 +nan.0) は真になる（`=` はどちらも逆）。
+//
+// **`=` のほうを直すのは20日目**（決定95）。ここを19日目に入れたのは、
+// is_number() に実数が入った時点で num_cmp が実数を型エラーで弾いてしまい、
+// (eqv? 1.5 1.5) が真偽ではなくエラーになるため（決定97）。
+static bool eqv_number(ValuePtr x, ValuePtr y) {
+    if (is_flonum(x) || is_flonum(y)) {
+        if (!is_flonum(x) || !is_flonum(y)) return false;      // 正確さが違う
+        double a = static_cast<Flonum*>(x)->v;
+        double b = static_cast<Flonum*>(y)->v;
+        return std::memcmp(&a, &b, sizeof a) == 0;
+    }
+    return num_cmp(x, y, "eqv?") == 0;
+}
+
 // eq? / eqv?: 数値は値比較、シンボルは名前比較、それ以外はポインタ比較（§2.2）。
 // scheme13 ではシンボルはインターンされ fixnum は即値なので、多くはポインタ比較で済む。
 static bool eqv_values(ValuePtr x, ValuePtr y) {
     if (x == y) return true;
-    if (is_number(x) && is_number(y)) return num_cmp(x, y, "eq?") == 0;
+    if (is_number(x) && is_number(y)) return eqv_number(x, y);
     return false;
 }
 static ValuePtr prim_eq(ValuePtr* a, std::size_t n) {
@@ -2892,7 +3042,7 @@ using PairMap = std::unordered_map<const void*, const void*, std::hash<const voi
 
 static bool equal_values(ValuePtr a, ValuePtr b, PairMap& seen) {
     if (a == b) return true;
-    if (is_number(a) && is_number(b)) return num_cmp(a, b, "equal?") == 0;
+    if (is_number(a) && is_number(b)) return eqv_number(a, b);   // 数は eqv? と同じ（R5RS）
     if (tag_of(a) != tag_of(b)) return false;
 
     switch (tag_of(a)) {
@@ -3105,19 +3255,18 @@ static ValuePtr prim_string_to_symbol(ValuePtr* a, std::size_t n) {
     need_args("string->symbol", n, 1, 1);
     return make_symbol(view_of(str_of(a[0], "string->symbol")));
 }
+// write と同じ関数で書く（書式を2つ持たない。18日目の決定90）
 static ValuePtr prim_number_to_string(ValuePtr* a, std::size_t n) {
     need_args("number->string", n, 1, 1);
-    return make_string(num_of(a[0], "number->string").str());
+    if (!is_number(a[0])) prim_type_error("number->string", "a number", a[0]);
+    return make_string(to_string(a[0]));
 }
+// リーダと同じ判定を使う（数の文法を2つ持たない。決定89）
 static ValuePtr prim_string_to_number(ValuePtr* a, std::size_t n) {
     need_args("string->number", n, 1, 1);
-    std::string t = to_std(str_of(a[0], "string->number"));
-    if (t.empty()) return g_false;
-    std::size_t i = (t[0] == '-' || t[0] == '+') ? 1 : 0;
-    if (i >= t.size()) return g_false;
-    for (; i < t.size(); ++i)
-        if (!std::isdigit(static_cast<unsigned char>(t[i]))) return g_false;
-    return make_int_from_text(t);
+    ValuePtr num = nullptr;
+    if (!parse_number(view_of(str_of(a[0], "string->number")), &num)) return g_false;
+    return num;
 }
 
 // --- ベクタ ----------------------------------------------------------------
@@ -4027,6 +4176,22 @@ static void selftest_display() {
     ValuePtr shared = list_from({make_symbol("a")});
     check_eq("shared DAG", to_string(list_from({shared, shared})), "((a) (a))");
 
+    // 実数（18日目の §2.1。決定90）。**丸めて隠さない**
+    check_eq("real 1.5",       read_one_to_string("1.5"),    "1.5");
+    check_eq("real 1.0",       read_one_to_string("1.0"),    "1.0");
+    check_eq("real 6.0",       to_string(make_flonum(2.0 * 3.0)), "6.0");
+    check_eq("real 1/3",       to_string(make_flonum(1.0 / 3.0)), "0.3333333333333333");
+    check_eq("real 0.1+0.2",   to_string(make_flonum(0.1 + 0.2)), "0.30000000000000004");
+    check_eq("real 1e21",      read_one_to_string("1e21"),   "1e21");
+    check_eq("real 1e-7",      read_one_to_string("1e-7"),   "1e-7");
+    check_eq("real -0.0",      read_one_to_string("-0.0"),   "-0.0");
+    check_eq("real +inf.0",    read_one_to_string("+inf.0"), "+inf.0");
+    check_eq("real -inf.0",    read_one_to_string("-inf.0"), "-inf.0");
+    check_eq("real +nan.0",    read_one_to_string("+nan.0"), "+nan.0");
+    check_eq("real in list",   read_one_to_string("(1.5 x)"), "(1.5 x)");
+    check_eq("real in vector", read_one_to_string("#(1.5)"),  "#(1.5)");
+    check_eq("real display",   to_display_string(make_flonum(2.5)), "2.5");
+
     // display と write の違いは、一番外側が文字列のときだけ
     check_eq("display string", to_display_string(make_string("x")), "x");
     check_eq("write string",   to_string(make_string("x")),         "\"x\"");
@@ -4055,6 +4220,10 @@ static void selftest_reader() {
     check_eq("neg number",   read_one_to_string("-5"),    "-5");
     check_eq("plus symbol",  read_one_to_string("+"),     "+");
     check_eq("minus symbol", read_one_to_string("-"),     "-");
+    // 符号つき整数。+5 は19日目まで Boost の例外で処理系ごと落ちていた（決定99）
+    check_eq("plus number",  read_one_to_string("+5"),    "5");
+    check_eq("plus bignum",  read_one_to_string("+9999999999800000000001"),
+                             "9999999999800000000001");
     check_eq("1a is symbol", read_one_to_string("1a"),    "1a");
     check_eq("bignum",
              read_one_to_string("9999999999800000000001"), "9999999999800000000001");
@@ -4080,6 +4249,31 @@ static void selftest_reader() {
     // # で始まる他のトークンはシンボル
     check_eq("hash label", read_one_to_string("#1="), "#1=");
     check_eq("hash true only with delimiter", read_one_to_string("#true"), "#true");
+
+    // 実数のリテラル（§2.5。18日目の決定89）。
+    // **トークン全体が形に一致したときだけ数**で、外れたらシンボルのまま
+    check_eq("real .5",       read_one_to_string(".5"),      "0.5");
+    check_eq("real 1.",       read_one_to_string("1."),      "1.0");
+    check_eq("real 1.5e-3",   read_one_to_string("1.5e-3"),  "0.0015");
+    check_eq("real -0.75",    read_one_to_string("-0.75"),   "-0.75");
+    check_eq("1/2 is symbol",   read_one_to_string("1/2"),   "1/2");
+    check_eq("1.2.3 is symbol", read_one_to_string("1.2.3"), "1.2.3");
+    check_eq("1e is symbol",    read_one_to_string("1e"),    "1e");
+    check_eq("1e+ is symbol",   read_one_to_string("1e+"),   "1e+");
+    // from_chars に判定を任せると数に化ける3つ（決定89）。シンボルのままであること
+    check_eq("inf is symbol",      read_one_to_string("inf"),      "inf");
+    check_eq("nan is symbol",      read_one_to_string("nan"),      "nan");
+    check_eq("infinity is symbol", read_one_to_string("infinity"), "infinity");
+    // 桁あふれと桁不足は ±inf / ±0.0 に丸める（黙って落とさない）
+    check_eq("overflow",      read_one_to_string("1e400"),   "+inf.0");
+    check_eq("underflow",     read_one_to_string("1e-400"),  "0.0");
+    check_eq("neg underflow", read_one_to_string("-1e-400"), "-0.0");
+    // 実数は読み戻せる（決定90）。整数と違って write の出力が入力に使える
+    check_eq("real roundtrip", read_one_to_string("0.30000000000000004"),
+                               "0.30000000000000004");
+    // ドット対とは衝突しない（'.' がドットになるのは次が区切り文字のときだけ）
+    check_eq("dot vs real",   read_one_to_string("(a .5)"),  "(a 0.5)");
+    check_eq("dotted pair 2", read_one_to_string("(a . 5)"), "(a . 5)");
 
     // コメントと複数行
     {
