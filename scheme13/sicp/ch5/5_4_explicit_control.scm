@@ -422,6 +422,12 @@
     (cons (cons 'lambda (cons (map car bindings) body))
           (map cadr bindings))))
 
+(define (no-clauses? clauses) (null? clauses))
+(define (first-clause clauses) (car clauses))
+(define (rest-clauses clauses) (cdr clauses))
+(define (clause-predicate clause) (car clause))
+(define (clause-actions clause) (cdr clause))
+
 (define (true? x) (not (eq? x #f)))
 
 ; --- 環境 ---
@@ -548,9 +554,7 @@
       (goto (reg continue))
 
     ;; --- 演習5.23 — 派生式は書き換えて入口へ戻す ---
-    ev-cond
-      (assign exp (op cond->if) (reg exp))
-      (goto (label eval-dispatch))
+    ;; `cond` は差し替えられるように別の塊にしてある（演習5.24）。
     ev-let
       (assign exp (op let->combination) (reg exp))
       (goto (label eval-dispatch))
@@ -732,6 +736,50 @@
       (restore continue)
       (goto (reg continue))))
 
+; 演習5.23 の `cond` — **書き換えて入口へ戻すだけ。** 3命令で済む。
+(define ec-cond-derived
+  '(ev-cond
+      (assign exp (op cond->if) (reg exp))
+      (goto (label eval-dispatch))))
+
+; 演習5.24 — `cond` を派生式ではなく**基本の特殊形式**として実装する。
+; 節を順に見て、真になった節の本体を列として評価する。
+; **`if` に潰さないので、書き換えの分だけ命令が減る**代わりに、
+; 制御器が節の構造を直に知ることになる（`cond` の構文が制御器に染み出す）。
+(define ec-cond-basic
+  '(ev-cond
+      (assign unev (op cond-clauses) (reg exp))
+      (save continue)
+    ev-cond-loop
+      (test (op no-clauses?) (reg unev))
+      (branch (label ev-cond-none))
+      (assign exp (op first-clause) (reg unev))
+      (test (op cond-else-clause?) (reg exp))
+      (branch (label ev-cond-actions))
+      (save unev)
+      (save env)
+      (assign exp (op clause-predicate) (reg exp))
+      (assign continue (label ev-cond-decide))
+      (goto (label eval-dispatch))
+    ev-cond-decide
+      (restore env)
+      (restore unev)
+      (test (op true?) (reg val))
+      (branch (label ev-cond-chosen))
+      (assign unev (op rest-clauses) (reg unev))
+      (goto (label ev-cond-loop))
+    ev-cond-chosen
+      (assign exp (op first-clause) (reg unev))
+    ev-cond-actions
+      ;; continue は入口で積んである。列の最後の式がそれを戻すので、
+      ;; **節の本体の末尾呼び出しも場所を食わない。**
+      (assign unev (op clause-actions) (reg exp))
+      (goto (label ev-sequence))
+    ev-cond-none
+      (restore continue)
+      (assign val (const false))
+      (goto (reg continue))))
+
 (define ec-end '(ec-done))
 
 (define ec-operations
@@ -752,6 +800,12 @@
    (list 'first-exp first-exp) (list 'rest-exps rest-exps)
    (list 'last-exp? last-exp?) (list 'no-more-exps? no-more-exps?)
    (list 'cond? cond?) (list 'cond->if cond->if)
+   (list 'cond-clauses cond-clauses)
+   (list 'cond-else-clause? cond-else-clause?)
+   (list 'no-clauses? no-clauses?) (list 'first-clause first-clause)
+   (list 'rest-clauses rest-clauses)
+   (list 'clause-predicate clause-predicate)
+   (list 'clause-actions clause-actions)
    (list 'let? let?) (list 'let->combination let->combination)
    (list 'application? application?)
    (list 'operator operator) (list 'operands operands)
@@ -774,10 +828,14 @@
 
 (define eceval
   (make-machine ec-registers ec-operations
-                (append ec-main ec-seq-tail ec-end)))
+                (append ec-main ec-cond-derived ec-seq-tail ec-end)))
 (define eceval-no-tail
   (make-machine ec-registers ec-operations
-                (append ec-main ec-seq-naive ec-end)))
+                (append ec-main ec-cond-derived ec-seq-naive ec-end)))
+; 演習5.24 — `cond` だけを差し替えた評価器。**他は1行も違わない。**
+(define eceval-cond-basic
+  (make-machine ec-registers ec-operations
+                (append ec-main ec-cond-basic ec-seq-tail ec-end)))
 
 ; ============================================================
 ; 5.4.4 評価器を走らせる
@@ -1030,11 +1088,71 @@
        (list (ec-eval '(+ 1 1)) ec-error) (list 2 #f))
 
 ; ============================================================
+; 演習5.24 — cond を基本の特殊形式にする
+; ============================================================
+; `cond` だけを差し替えた評価器（`eceval-cond-basic`）で同じ主張を通す。
+; **答えは1つも変わらない。** 変わるのは、制御器が節の構造を直に知ることと、
+; 書き換えの手間が消えること。
+(define cond-basic-env (setup-environment))
+(define (cond-eval exp) (ec-eval-in eceval-cond-basic exp cond-basic-env))
+(define (cond-eval-seq exps)
+  (let loop ((es exps) (last 'none))
+    (if (null? es) last (loop (cdr es) (cond-eval (car es))))))
+
+(check "演習5.24 真になった節" (cond-eval '(cond ((= 1 2) (quote a))
+                                                  ((= 1 1) (quote b))
+                                                  (else (quote c)))) 'b)
+(check "演習5.24 else 節" (cond-eval '(cond ((= 1 2) (quote a))
+                                             (else (quote c)))) 'c)
+(check "演習5.24 どの節も真でないとき"
+       (cond-eval '(cond ((= 1 2) (quote a)))) 'false)
+(check "演習5.24 節の本体は複数の式"
+       (cond-eval-seq '((define c 0)
+                        (cond ((= 1 1) (set! c 5) (+ c 1))))) 6)
+(check "演習5.24 述語は左から順に1度だけ評価される"
+       (cond-eval-seq
+        '((define seen (quote ()))
+          (define (p x v) (set! seen (cons x seen)) v)
+          (cond ((p 1 #f) (quote a))
+                ((p 2 #t) (quote b))
+                ((p 3 #t) (quote c)))
+          seen))
+       '(2 1))
+(check "演習5.24 節の中で手続きを呼べる"
+       (cond-eval-seq '((define (sign n)
+                          (cond ((> n 0) (quote pos))
+                                ((< n 0) (quote neg))
+                                (else (quote zero))))
+                        (list (sign 3) (sign -3) (sign 0))))
+       '(pos neg zero))
+; **派生式版と基本形式版で答えが一致する。** これが差し替えの正しさの意味。
+(check "演習5.24 派生式版と同じ答え"
+       (map (lambda (e) (equal? (cond-eval e) (ec-eval e)))
+            '((cond ((= 1 1) 1) (else 2))
+              (cond ((= 1 2) 1) (else 2))
+              (cond ((= 1 2) 1))
+              (cond (#t (quote x) (quote y)))))
+       (list #t #t #t #t))
+; 節の本体の末尾呼び出しも場所を食わない（continue を入口で預けているため）。
+(check "演習5.24 cond の本体でも末尾再帰が効く"
+       (begin (cond-eval-seq
+               '((define (down n) (cond ((= n 0) (quote done))
+                                        (else (down (- n 1)))))
+                 (down 20)))
+              (let ((d20 (stack-max-depth eceval-cond-basic)))
+                (cond-eval '(down 200))
+                (= (stack-max-depth eceval-cond-basic) d20)))
+       #t)
+; **命令列は基本形式版のほうが長い。** 書き換えを制御器が肩代わりするので。
+(check "演習5.24 基本形式版のほうが制御器が長い"
+       (> (length ec-cond-basic) (length ec-cond-derived)) #t)
+
+; ============================================================
 ; 機械としての大きさ
 ; ============================================================
 (check "5.4 制御器の命令数"
-       (> (length (append ec-main ec-seq-tail ec-end)) 100) #t)
-(check "5.4 機械演算の数" (length ec-operations) 49)
+       (> (length (append ec-main ec-cond-derived ec-seq-tail ec-end)) 100) #t)
+(check "5.4 機械演算の数" (length ec-operations) 56)
 (check "5.4 レジスタは7本" (length ec-registers) 7)
 ; 10000 回のループは百万命令を超える。**シミュレータの実行ループが
 ; 末尾呼び出しでなければ、ここでスタックが尽きる。**

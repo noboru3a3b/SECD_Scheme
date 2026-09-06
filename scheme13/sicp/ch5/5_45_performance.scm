@@ -1,31 +1,18 @@
-; SICP 5.5「翻訳系」を scheme13 で確認する。
-;   5.5.1 翻訳系の構造 / 5.5.2 式の翻訳 / 5.5.3 組み合わせの翻訳
-;   5.5.4 命令列の結合 / 5.5.5 翻訳された符号の例
-;   5.5.6 字句アドレス / 5.5.7 翻訳された符号と評価器をつなぐ
+; SICP 演習5.45・5.46 — 3つのやり方を同じ計算で並べて測る。
 ;
-; **ここが scheme13 の設計そのものである。** 5.4 の評価器は式を毎回見て
-; 場合分けしたが、5.5 は同じ場合分けを**一度だけ**行い、結果を命令列として
-; 残す。scheme13 のコンパイラが `LDG` / `LD` / `APP` / `TAPP` を吐くのと
-; まったく同じ話で、レジスタ機械という下地が違うだけである。
+; 同じ `(fact n)` と `(fib n)` を、
+;   (1) **専用の機械**（5.1.4。その計算のためだけに書いた制御器）
+;   (2) **翻訳された符号**（5.5。翻訳系が吐いた制御器）
+;   (3) **解釈**（5.4。明示的制御の評価器が式を毎回見る）
+; の3通りで走らせ、押し込みの回数・最大の深さ・実行命令数を比べる。
 ;
-; 対応はこうなる:
-;   5.5 の linkage `return` + target `val`   → scheme13 の `TAPP`（末尾呼び出し）
-;   5.5 の linkage が label / next            → scheme13 の `APP`
-;   5.5 の `preserving` が入れる save/restore  → scheme13 が継続に積む枠
-;   5.5.6 の字句アドレス (frame . displacement) → scheme13 の `LD (depth index)`
+; **これは第5章全体の締めくくりの問いである。** 5.5 の冒頭が言う
+; 「翻訳は解釈より速い」を、推測ではなく数で確かめる。演習5.45 は
+; 「翻訳された符号は専用の機械にどこまで近づくか」、演習5.46 は
+; 「木の再帰でも同じ傾向か」を問う。
 ;
-; **scheme13 は 5.5.6 を既定で行っている。** 局所変数は名前ではなく
-; 「何段外の何番目」で引かれる。5.5.6 を通すことは、その設計が教科書の
-; 言うとおりのものであることの確認になる。
-;
-; 処理系側で問われるのは
-;   - 準引用（quasiquote）で命令を組み立てられること。**命令列は
-;     データであり、コンパイラはそれを継ぎ足していく手続きである**
-;   - `apply` で可変個引数の手続きを再帰的に呼べること
-;     （`append-instruction-seqs` が可変個を取る）
-;   - 生成した命令列が、5.1〜5.2 のシミュレータでそのまま走ること
-;   - **翻訳された末尾呼び出しが定数の場所で回ること。**
-;     5.4 で測ったのと同じ性質を、今度は生成された符号について測る
+; 処理系側で問われるのは、5.4 と 5.5 の両方を**1つのファイルの中に同居させて
+; 同時に動かせること**。構文手続きと環境は共有し、機械だけを3つ持つ。
 (define ng-count 0)
 (define total-count 0)
 (define (check label expr expected)
@@ -347,18 +334,25 @@
   (for-each (lambda (a) (set-register-contents! machine (car a) (cadr a)))
             assignments)
   (start machine))
+; ============================================================
+; 機械演算の側 — 構文・環境・手続き
+; ============================================================
+; **評価器の制御器は、式がリストであることを知らない。** 構文を見るのは
+; ここに並ぶ述語と選択子だけで、制御器はそれを `(op ...)` として呼ぶ。
+; 4.1 で書いたものと同じ役割だが、あちらは Scheme の手続きとして評価器の
+; 中から呼ばれ、こちらは**機械の演算表**として外から渡される。
 
-; ============================================================
-; 構文・環境・手続き（5.4 と同じ道具立て）
-; ============================================================
 (define (tagged-list? exp tag) (and (pair? exp) (eq? (car exp) tag)))
-(define (self-evaluating? exp) (or (number? exp) (string? exp) (boolean? exp)))
+(define (self-evaluating? exp)
+  (or (number? exp) (string? exp) (boolean? exp)))
 (define (variable? exp) (symbol? exp))
 (define (quoted? exp) (tagged-list? exp 'quote))
 (define (text-of-quotation exp) (cadr exp))
+
 (define (assignment? exp) (tagged-list? exp 'set!))
 (define (assignment-variable exp) (cadr exp))
 (define (assignment-value exp) (caddr exp))
+
 (define (definition? exp) (tagged-list? exp 'define))
 (define (definition-variable exp)
   (if (symbol? (cadr exp)) (cadr exp) (car (cadr exp))))
@@ -366,26 +360,62 @@
   (if (symbol? (cadr exp))
       (caddr exp)
       (cons 'lambda (cons (cdr (cadr exp)) (cddr exp)))))
+
 (define (lambda? exp) (tagged-list? exp 'lambda))
 (define (lambda-parameters exp) (cadr exp))
 (define (lambda-body exp) (cddr exp))
+
 (define (if? exp) (tagged-list? exp 'if))
 (define (if-predicate exp) (cadr exp))
 (define (if-consequent exp) (caddr exp))
-(define (if-alternative exp) (if (null? (cdddr exp)) '(quote false) (cadddr exp)))
+(define (if-alternative exp)
+  (if (null? (cdddr exp)) 'false (cadddr exp)))
+
 (define (begin? exp) (tagged-list? exp 'begin))
 (define (begin-actions exp) (cdr exp))
 (define (first-exp seq) (car seq))
 (define (rest-exps seq) (cdr seq))
 (define (last-exp? seq) (null? (cdr seq)))
-(define (let? exp) (tagged-list? exp 'let))
-(define (let->combination exp)
-  (let ((bindings (cadr exp)) (body (cddr exp)))
-    (cons (cons 'lambda (cons (map car bindings) body)) (map cadr bindings))))
+(define (no-more-exps? seq) (null? seq))
+
 (define (application? exp) (pair? exp))
 (define (operator exp) (car exp))
 (define (operands exp) (cdr exp))
+(define (no-operands? ops) (null? ops))
+(define (first-operand ops) (car ops))
+(define (rest-operands ops) (cdr ops))
+(define (last-operand? ops) (null? (cdr ops)))
+(define (empty-arglist) '())
+; **引数は後ろへ足す。** これで argl が左から右の順に並ぶ（5.4 の評価順）。
+(define (adjoin-arg arg arglist) (append arglist (list arg)))
 
+; 演習5.23 — cond と let は派生式。制御器に分岐を1つずつ足し、
+; **式を書き換えて eval-dispatch へ戻す**だけで済む。
+(define (cond? exp) (tagged-list? exp 'cond))
+(define (cond-clauses exp) (cdr exp))
+(define (cond-else-clause? clause) (eq? (car clause) 'else))
+(define (cond->if exp) (expand-cond-clauses (cond-clauses exp)))
+(define (expand-cond-clauses clauses)
+  (if (null? clauses)
+      'false
+      (let ((first (car clauses)) (rest (cdr clauses)))
+        (if (cond-else-clause? first)
+            (cons 'begin (cdr first))
+            (list 'if (car first)
+                  (cons 'begin (cdr first))
+                  (expand-cond-clauses rest))))))
+(define (let? exp) (tagged-list? exp 'let))
+(define (let->combination exp)
+  (let ((bindings (cadr exp)) (body (cddr exp)))
+    (cons (cons 'lambda (cons (map car bindings) body))
+          (map cadr bindings))))
+
+(define (true? x) (not (eq? x #f)))
+
+; --- 環境 ---
+; 枠は「名前の並びと値の並び」の対、環境は枠の並び。
+; scheme13 の `Env*` の鎖と同じ形だが、あちらは可変長の末尾配列で、
+; 名前はコンパイル時に添字へ落ちている（5.5.6 の字句アドレスに当たる）。
 (define (make-frame variables values) (cons variables values))
 (define (frame-variables frame) (car frame))
 (define (frame-values frame) (cdr frame))
@@ -396,31 +426,348 @@
 (define (first-frame env) (car env))
 (define (enclosing-environment env) (cdr env))
 (define (extend-environment vars vals base-env)
-  (if (= (length vars) (length vals))
-      (cons (make-frame vars vals) base-env)
-      (error "compiled: wrong number of arguments" vars)))
+  (cond ((= (length vars) (length vals))
+         (cons (make-frame vars vals) base-env))
+        ((< (length vars) (length vals))
+         (error "eceval: too many arguments supplied" vars))
+        (else (error "eceval: too few arguments supplied" vars))))
+
 (define (env-scan var env found missing)
+  ; 枠を外へ辿り、見つかったら値のセルを found に渡す。
   (if (null? env)
       (missing)
       (let loop ((vars (frame-variables (first-frame env)))
                  (vals (frame-values (first-frame env))))
-        (cond ((null? vars)
-               (env-scan var (enclosing-environment env) found missing))
+        (cond ((null? vars) (env-scan var (enclosing-environment env)
+                                      found missing))
               ((eq? var (car vars)) (found vals))
               (else (loop (cdr vars) (cdr vals)))))))
+
 (define (lookup-variable-value var env)
-  (env-scan var env car (lambda () (error "compiled: unbound variable" var))))
+  (env-scan var env car
+            (lambda () (error "eceval: unbound variable" var))))
 (define (set-variable-value! var val env)
   (env-scan var env (lambda (cell) (set-car! cell val) 'ok)
-            (lambda () (error "compiled: unbound variable -- SET!" var))))
+            (lambda () (error "eceval: unbound variable -- SET!" var))))
 (define (define-variable! var val env)
+  ; 定義は**いまの枠だけ**を見る。外に同じ名前があっても隠す。
   (let loop ((vars (frame-variables (first-frame env)))
              (vals (frame-values (first-frame env))))
-    (cond ((null? vars) (add-binding-to-frame! var val (first-frame env)) 'ok)
+    (cond ((null? vars)
+           (add-binding-to-frame! var val (first-frame env)) 'ok)
           ((eq? var (car vars)) (set-car! vals val) 'ok)
           (else (loop (cdr vars) (cdr vals))))))
 
-; **翻訳された手続きは「入口のラベルと環境」の対である。**
+; --- 手続き ---
+(define (make-procedure parameters body env)
+  (list 'procedure parameters body env))
+(define (compound-procedure? p) (tagged-list? p 'procedure))
+(define (procedure-parameters p) (cadr p))
+(define (procedure-body p) (caddr p))
+(define (procedure-environment p) (cadddr p))
+(define (primitive-procedure? p) (tagged-list? p 'primitive))
+(define (apply-primitive-procedure p args) (apply (cadr p) args))
+
+(define ec-error #f)
+(define (signal-error message) (set! ec-error message) 'signalled)
+
+; ============================================================
+; 5.4.1 評価器の中核 / 5.4.3 条件式・代入・定義
+; ============================================================
+; レジスタは7本。
+;   exp      いま評価している式
+;   env      その環境
+;   val      評価の結果
+;   continue 評価が済んだらどこへ帰るか（**制御が値になった姿**）
+;   proc     適用する手続き
+;   argl     評価済みの引数の並び
+;   unev     まだ評価していない部分式の並び
+;
+; 制御器は「式を場合分けして跳ぶ」だけの列で、再帰は `save` / `restore` と
+; `continue` で作る。**言語の側に手続き呼び出しは1つも無い。**
+;
+; 列の評価（ev-sequence）だけを差し替えられるように、制御器を3つに割って
+; 持つ。演習5.28（末尾再帰をやめる）を、他を1行も変えずに測るためである。
+
+(define ec-main
+  '(;; 入口 — continue に「終わり」を入れてから評価に入る
+    (assign continue (label ec-done))
+    (goto (label eval-dispatch))
+
+    eval-dispatch
+      (test (op self-evaluating?) (reg exp))
+      (branch (label ev-self-eval))
+      (test (op variable?) (reg exp))
+      (branch (label ev-variable))
+      (test (op quoted?) (reg exp))
+      (branch (label ev-quoted))
+      (test (op assignment?) (reg exp))
+      (branch (label ev-assignment))
+      (test (op definition?) (reg exp))
+      (branch (label ev-definition))
+      (test (op if?) (reg exp))
+      (branch (label ev-if))
+      (test (op lambda?) (reg exp))
+      (branch (label ev-lambda))
+      (test (op begin?) (reg exp))
+      (branch (label ev-begin))
+      (test (op cond?) (reg exp))
+      (branch (label ev-cond))
+      (test (op let?) (reg exp))
+      (branch (label ev-let))
+      (test (op application?) (reg exp))
+      (branch (label ev-application))
+      (goto (label unknown-expression-type))
+
+    ;; --- 部分式を持たない式 — val に置いて帰るだけ ---
+    ev-self-eval
+      (assign val (reg exp))
+      (goto (reg continue))
+    ev-variable
+      (assign val (op lookup-variable-value) (reg exp) (reg env))
+      (goto (reg continue))
+    ev-quoted
+      (assign val (op text-of-quotation) (reg exp))
+      (goto (reg continue))
+    ev-lambda
+      (assign unev (op lambda-parameters) (reg exp))
+      (assign exp (op lambda-body) (reg exp))
+      (assign val (op make-procedure) (reg unev) (reg exp) (reg env))
+      (goto (reg continue))
+
+    ;; --- 演習5.23 — 派生式は書き換えて入口へ戻す ---
+    ev-cond
+      (assign exp (op cond->if) (reg exp))
+      (goto (label eval-dispatch))
+    ev-let
+      (assign exp (op let->combination) (reg exp))
+      (goto (label eval-dispatch))
+
+    ;; --- 適用 ---
+    ;; 演算子を先に評価し、被演算子を左から右へ評価して argl に溜める。
+    ;; **ここで積む continue が、後で ev-sequence の最後の式で戻される。**
+    ;; その受け渡しが末尾再帰の全部である。
+    ev-application
+      (save continue)
+      (save env)
+      (assign unev (op operands) (reg exp))
+      (save unev)
+      (assign exp (op operator) (reg exp))
+      (assign continue (label ev-appl-did-operator))
+      (goto (label eval-dispatch))
+    ev-appl-did-operator
+      (restore unev)
+      (restore env)
+      (assign argl (op empty-arglist))
+      (assign proc (reg val))
+      (test (op no-operands?) (reg unev))
+      (branch (label apply-dispatch))
+      (save proc)
+    ev-appl-operand-loop
+      (save argl)
+      (assign exp (op first-operand) (reg unev))
+      (test (op last-operand?) (reg unev))
+      (branch (label ev-appl-last-arg))
+      (save env)
+      (save unev)
+      (assign continue (label ev-appl-accumulate-arg))
+      (goto (label eval-dispatch))
+    ev-appl-accumulate-arg
+      (restore unev)
+      (restore env)
+      (restore argl)
+      (assign argl (op adjoin-arg) (reg val) (reg argl))
+      (assign unev (op rest-operands) (reg unev))
+      (goto (label ev-appl-operand-loop))
+    ev-appl-last-arg
+      ;; 最後の引数では env も unev も要らないので積まない。
+      (assign continue (label ev-appl-accum-last-arg))
+      (goto (label eval-dispatch))
+    ev-appl-accum-last-arg
+      (restore argl)
+      (assign argl (op adjoin-arg) (reg val) (reg argl))
+      (restore proc)
+      (goto (label apply-dispatch))
+
+    apply-dispatch
+      (test (op primitive-procedure?) (reg proc))
+      (branch (label primitive-apply))
+      (test (op compound-procedure?) (reg proc))
+      (branch (label compound-apply))
+      (goto (label unknown-procedure-type))
+    primitive-apply
+      (assign val (op apply-primitive-procedure) (reg proc) (reg argl))
+      (restore continue)
+      (goto (reg continue))
+    compound-apply
+      ;; **ここで continue を戻さない。** 積みっぱなしのまま本体の列へ入り、
+      ;; 列の最後の式が戻す。それが末尾呼び出しの成立する仕掛けである。
+      (assign unev (op procedure-parameters) (reg proc))
+      (assign env (op procedure-environment) (reg proc))
+      (assign env (op extend-environment) (reg unev) (reg argl) (reg env))
+      (assign unev (op procedure-body) (reg proc))
+      (goto (label ev-sequence))
+
+    ev-begin
+      (assign unev (op begin-actions) (reg exp))
+      (save continue)
+      (goto (label ev-sequence))
+
+    ;; --- 5.4.3 条件式 ---
+    ev-if
+      (save exp)
+      (save env)
+      (save continue)
+      (assign continue (label ev-if-decide))
+      (assign exp (op if-predicate) (reg exp))
+      (goto (label eval-dispatch))
+    ev-if-decide
+      (restore continue)
+      (restore env)
+      (restore exp)
+      (test (op true?) (reg val))
+      (branch (label ev-if-consequent))
+      ;; **枝は末尾の位置にある。** continue を戻したあとで飛び込むので、
+      ;; 枝の中の呼び出しは場所を食わない。
+      (assign exp (op if-alternative) (reg exp))
+      (goto (label eval-dispatch))
+    ev-if-consequent
+      (assign exp (op if-consequent) (reg exp))
+      (goto (label eval-dispatch))
+
+    ;; --- 5.4.3 代入と定義 ---
+    ev-assignment
+      (assign unev (op assignment-variable) (reg exp))
+      (save unev)
+      (assign exp (op assignment-value) (reg exp))
+      (save env)
+      (save continue)
+      (assign continue (label ev-assignment-1))
+      (goto (label eval-dispatch))
+    ev-assignment-1
+      (restore continue)
+      (restore env)
+      (restore unev)
+      (perform (op set-variable-value!) (reg unev) (reg val) (reg env))
+      (assign val (const ok))
+      (goto (reg continue))
+    ev-definition
+      (assign unev (op definition-variable) (reg exp))
+      (save unev)
+      (assign exp (op definition-value) (reg exp))
+      (save env)
+      (save continue)
+      (assign continue (label ev-definition-1))
+      (goto (label eval-dispatch))
+    ev-definition-1
+      (restore continue)
+      (restore env)
+      (restore unev)
+      (perform (op define-variable!) (reg unev) (reg val) (reg env))
+      (assign val (const ok))
+      (goto (reg continue))
+
+    ;; --- 演習5.30 の入口 — 型の分からない式と手続き ---
+    unknown-expression-type
+      (assign val (const unknown-expression-type))
+      (goto (label signal-error))
+    unknown-procedure-type
+      (restore continue)
+      (assign val (const unknown-procedure-type))
+      (goto (label signal-error))
+    signal-error
+      (perform (op signal-error) (reg val))
+      (goto (label ec-done))))
+
+; --- 5.4.2 列の評価と末尾再帰 ---
+; **最後の式だけを別に扱う。** continue を先に戻してから飛び込むので、
+; そこが手続き呼び出しであっても、スタックには何も残らない。
+(define ec-seq-tail
+  '(ev-sequence
+      (assign exp (op first-exp) (reg unev))
+      (test (op last-exp?) (reg unev))
+      (branch (label ev-sequence-last-exp))
+      (save unev)
+      (save env)
+      (assign continue (label ev-sequence-continue))
+      (goto (label eval-dispatch))
+    ev-sequence-continue
+      (restore env)
+      (restore unev)
+      (assign unev (op rest-exps) (reg unev))
+      (goto (label ev-sequence))
+    ev-sequence-last-exp
+      (restore continue)
+      (goto (label eval-dispatch))))
+
+; 演習5.28 — 最後の式を特別扱いしない版。**制御器の他の場所は1行も違わない。**
+; 帰ってくる場所が要るので unev と env を積み、抜けるときに continue を戻す。
+(define ec-seq-naive
+  '(ev-sequence
+      (test (op no-more-exps?) (reg unev))
+      (branch (label ev-sequence-end))
+      (assign exp (op first-exp) (reg unev))
+      (save unev)
+      (save env)
+      (assign continue (label ev-sequence-continue))
+      (goto (label eval-dispatch))
+    ev-sequence-continue
+      (restore env)
+      (restore unev)
+      (assign unev (op rest-exps) (reg unev))
+      (goto (label ev-sequence))
+    ev-sequence-end
+      (restore continue)
+      (goto (reg continue))))
+
+(define ec-end '(ec-done))
+
+(define ec-operations
+  (list
+   (list 'self-evaluating? self-evaluating?) (list 'variable? variable?)
+   (list 'quoted? quoted?) (list 'text-of-quotation text-of-quotation)
+   (list 'assignment? assignment?)
+   (list 'assignment-variable assignment-variable)
+   (list 'assignment-value assignment-value)
+   (list 'definition? definition?)
+   (list 'definition-variable definition-variable)
+   (list 'definition-value definition-value)
+   (list 'if? if?) (list 'if-predicate if-predicate)
+   (list 'if-consequent if-consequent) (list 'if-alternative if-alternative)
+   (list 'lambda? lambda?) (list 'lambda-parameters lambda-parameters)
+   (list 'lambda-body lambda-body) (list 'make-procedure make-procedure)
+   (list 'begin? begin?) (list 'begin-actions begin-actions)
+   (list 'first-exp first-exp) (list 'rest-exps rest-exps)
+   (list 'last-exp? last-exp?) (list 'no-more-exps? no-more-exps?)
+   (list 'cond? cond?) (list 'cond->if cond->if)
+   (list 'let? let?) (list 'let->combination let->combination)
+   (list 'application? application?)
+   (list 'operator operator) (list 'operands operands)
+   (list 'no-operands? no-operands?) (list 'first-operand first-operand)
+   (list 'rest-operands rest-operands) (list 'last-operand? last-operand?)
+   (list 'empty-arglist empty-arglist) (list 'adjoin-arg adjoin-arg)
+   (list 'lookup-variable-value lookup-variable-value)
+   (list 'set-variable-value! set-variable-value!)
+   (list 'define-variable! define-variable!)
+   (list 'extend-environment extend-environment)
+   (list 'primitive-procedure? primitive-procedure?)
+   (list 'compound-procedure? compound-procedure?)
+   (list 'apply-primitive-procedure apply-primitive-procedure)
+   (list 'procedure-parameters procedure-parameters)
+   (list 'procedure-body procedure-body)
+   (list 'procedure-environment procedure-environment)
+   (list 'true? true?) (list 'signal-error signal-error)))
+
+(define ec-registers '(exp env val proc argl continue unev))
+
+(define eceval
+  (make-machine ec-registers ec-operations
+                (append ec-main ec-seq-tail ec-end)))
+(define eceval-no-tail
+  (make-machine ec-registers ec-operations
+                (append ec-main ec-seq-naive ec-end)))
+
+; ============================================================
 ; 5.4 の合成手続きが「引数の並び・本体・環境」だったのと比べると、
 ; 本体が命令列の中の一点に潰れている。これが翻訳の眼目そのもの。
 (define (make-compiled-procedure entry env) (list 'compiled-procedure entry env))
@@ -431,7 +778,6 @@
 (define (apply-primitive-procedure p args) (apply (cadr p) args))
 (define (false? x) (eq? x #f))
 
-; ============================================================
 ; 5.5.4 命令列の結合
 ; ============================================================
 ; 命令列は「必要とするレジスタ・書き換えるレジスタ・命令の並び」の3つ組。
@@ -848,24 +1194,32 @@
             (goto (reg val)))))       ; ← 末尾呼び出し。何も積まない
         (else (error "compile: return linkage, target not val" target))))
 
-; ============================================================
-; 5.5.7 翻訳された符号を走らせる
-; ============================================================
+; --- 基本手続きと大域環境（5.4.4。翻訳側もこれを共有する）---
 (define (primitive-entry name proc) (list name (list 'primitive proc)))
-(define compiler-primitives
+(define (setup-environment)
+  (extend-environment
+   (map car ec-primitives) (map cadr ec-primitives)
+   the-empty-environment))
+(define ec-primitives
   (list (primitive-entry 'car car) (primitive-entry 'cdr cdr)
         (primitive-entry 'cons cons) (primitive-entry 'null? null?)
-        (primitive-entry 'list list) (primitive-entry 'not not)
-        (primitive-entry 'eq? eq?) (primitive-entry 'equal? equal?)
+        (primitive-entry 'pair? pair?) (primitive-entry 'list list)
+        (primitive-entry 'not not) (primitive-entry 'eq? eq?)
+        (primitive-entry 'equal? equal?)
         (primitive-entry '+ +) (primitive-entry '- -)
-        (primitive-entry '* *) (primitive-entry '= =)
-        (primitive-entry '< <) (primitive-entry '> >)
-        (primitive-entry 'remainder remainder)))
-(define (setup-environment)
-  (extend-environment (map car compiler-primitives)
-                      (map cadr compiler-primitives)
-                      the-empty-environment))
-(define the-global-environment (setup-environment))
+        (primitive-entry '* *) (primitive-entry '/ /)
+        (primitive-entry '= =) (primitive-entry '< <) (primitive-entry '> >)
+        (primitive-entry 'remainder remainder)
+        (primitive-entry 'append append)
+        (primitive-entry 'length length)))
+
+
+; ============================================================
+; 3つの機械を並べる
+; ============================================================
+; 環境は 5.4 の側のものを共有する。**翻訳された符号と解釈される符号が
+; 同じ環境と同じ手続き表現を使える**のが 5.5.7 の主張で、それがそのまま
+; この比較を成り立たせている。
 
 (define compiler-operations
   (list (list 'lookup-variable-value lookup-variable-value)
@@ -881,541 +1235,272 @@
         (list 'lexical-address-lookup lexical-address-lookup)
         (list 'lexical-address-set! lexical-address-set!)
         (list 'list list) (list 'cons cons)
-        ; 演習5.38 で開いて埋め込む演算。命令から直に呼ばれる
         (list '+ +) (list '- -) (list '* *) (list '= =)))
-
-; 埋め込んだ演算の1つ目の引数を置くレジスタ（演習5.38）。
 (define machine-regs (cons 'arg1 all-regs))
 
-; 翻訳して、その命令列そのものを制御器にした機械を作って走らせる。
-; **生成された符号が 5.1.5 の書式に収まっていなければ、ここでアセンブルに
-; 失敗する。** 翻訳系の出力が本当にレジスタ機械の言語であることの確認になる。
-;
-; **機械は1つでなければならない。** 翻訳された手続きの値は「入口のラベル」、
-; すなわち*その機械の*命令列の中の一点を指す。式ごとに機械を作り直すと、
-; 前に定義した手続きの入口が別の機械のレジスタを掴んだままになり、
-; 呼び出した先で `proc` が空のままになる。5.5.7 が翻訳した符号を評価器の
-; 機械へ「積み込む」形にしているのは、まさにこの理由である。
+; (2) 翻訳された符号 — 機械は1つで、式ごとに命令列を積み込む（5.5.7）。
 (define compiled-machine (make-machine machine-regs compiler-operations '()))
-(define last-machine compiled-machine)
+(define compiled-env (setup-environment))
 (define (run-compiled exp)
   (let ((code (statements (compile exp 'val 'next))))
     ((compiled-machine 'install-instruction-sequence)
      (assemble code compiled-machine))
-    (run compiled-machine (list (list 'env the-global-environment)))
+    (run compiled-machine (list (list 'env compiled-env)))
     (get-register-contents compiled-machine 'val)))
 (define (run-compiled-seq exps)
   (let loop ((es exps) (last 'none))
     (if (null? es) last (loop (cdr es) (run-compiled (car es))))))
 
-; --- 5.5.2 の式が翻訳されて走る ---
-(check "5.5.2 数" (run-compiled '42) 42)
-(check "5.5.2 引用" (run-compiled '(quote (a b))) '(a b))
-(check "5.5.2 変数" (run-compiled '(quote ())) '())
-(check "5.5.2 define と参照"
-       (run-compiled-seq '((define n 7) n)) 7)
-(check "5.5.2 set!"
-       (run-compiled-seq '((set! n 8) n)) 8)
-(check "5.5.2 if の真の枝" (run-compiled '(if (> 2 1) 10 20)) 10)
-(check "5.5.2 if の偽の枝" (run-compiled '(if (< 2 1) 10 20)) 20)
-(check "5.5.2 begin は最後の値" (run-compiled '(begin 1 2 3)) 3)
-(check "5.5.2 lambda は翻訳された手続きを作る"
-       (car (run-compiled '(lambda (x) x))) 'compiled-procedure)
+; (3) 解釈 — 5.4 の評価器。
+(define interpreted-env (setup-environment))
+(define (run-interpreted exp)
+  (set! ec-error #f)
+  (run eceval (list (list 'exp exp) (list 'env interpreted-env)))
+  (get-register-contents eceval 'val))
+(define (run-interpreted-seq exps)
+  (let loop ((es exps) (last 'none))
+    (if (null? es) last (loop (cdr es) (run-interpreted (car es))))))
 
-; --- 5.5.3 組み合わせ ---
-(check "5.5.3 基本手続きの適用" (run-compiled '(+ 1 2)) 3)
-(check "5.5.3 引数のない適用" (run-compiled '((lambda () 5))) 5)
-(check "5.5.3 入れ子の適用" (run-compiled '(+ (* 2 3) (- 10 4))) 12)
-(check "5.5.3 その場の lambda" (run-compiled '((lambda (x y) (* x y)) 6 7)) 42)
-(check "5.5.3 閉包が環境を捕まえる"
-       (run-compiled '(((lambda (x) (lambda (y) (+ x y))) 10) 5)) 15)
-(check "5.5.3 let" (run-compiled '(let ((a 3) (b 4)) (+ (* a a) (* b b)))) 25)
-(check "5.5.3 引数を5つ取る"
-       (run-compiled '((lambda (a b c d e) (list a b c d e)) 1 2 3 4 5))
-       '(1 2 3 4 5))
-; 演習5.36 — 翻訳系は被演算子を右から左へ評価する（5.4 の評価器と逆）。
-(check "演習5.36 被演算子は右から左へ"
-       (run-compiled-seq
-        '((define order (quote ()))
-          (define (note x) (set! order (cons x order)) x)
-          (list (note 1) (note 2) (note 3))
-          order))
-       '(1 2 3))
+; (1) 専用の機械 — その計算のためだけに書いた制御器（5.1.4）。
+(define special-fact
+  (make-machine
+   '(n val continue)
+   (list (list '= =) (list '- -) (list '* *))
+   '((assign continue (label fact-done))
+     fact-loop
+       (test (op =) (reg n) (const 1))
+       (branch (label base-case))
+       (save continue)
+       (save n)
+       (assign n (op -) (reg n) (const 1))
+       (assign continue (label after-fact))
+       (goto (label fact-loop))
+     after-fact
+       (restore n)
+       (restore continue)
+       (assign val (op *) (reg n) (reg val))
+       (goto (reg continue))
+     base-case
+       (assign val (const 1))
+       (goto (reg continue))
+     fact-done)))
+(define special-fib
+  (make-machine
+   '(n val continue)
+   (list (list '< <) (list '- -) (list '+ +))
+   '((assign continue (label fib-done))
+     fib-loop
+       (test (op <) (reg n) (const 2))
+       (branch (label immediate-answer))
+       (save continue)
+       (assign continue (label afterfib-n-1))
+       (save n)
+       (assign n (op -) (reg n) (const 1))
+       (goto (label fib-loop))
+     afterfib-n-1
+       (restore n)
+       (assign n (op -) (reg n) (const 2))
+       (assign continue (label afterfib-n-2))
+       (save val)
+       (goto (label fib-loop))
+     afterfib-n-2
+       (assign n (reg val))
+       (restore val)
+       (restore continue)
+       (assign val (op +) (reg val) (reg n))
+       (goto (reg continue))
+     immediate-answer
+       (assign val (reg n))
+       (goto (reg continue))
+     fib-done)))
 
-; --- 5.5.5 翻訳された符号の例（階乗）---
-(check "5.5.5 再帰の階乗"
-       (run-compiled-seq
-        '((define (fact n) (if (= n 1) 1 (* n (fact (- n 1)))))
-          (fact 10)))
-       3628800)
-(check "5.5.5 階乗が bignum へ伸びる" (run-compiled '(fact 25))
-       15511210043330985984000000)
-(check "5.5.5 木の再帰"
-       (run-compiled-seq
-        '((define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
-          (fib 15)))
-       610)
-(check "5.5.5 相互再帰"
-       (run-compiled-seq
-        '((define (ev? n) (if (= n 0) #t (od? (- n 1))))
-          (define (od? n) (if (= n 0) #f (ev? (- n 1))))
-          (list (ev? 10) (od? 10))))
-       (list #t #f))
-(check "5.5.5 リストを扱う手続き"
-       (run-compiled-seq
-        '((define (my-map f xs)
-            (if (null? xs) (quote ()) (cons (f (car xs)) (my-map f (cdr xs)))))
-          (my-map (lambda (x) (* x x)) (list 1 2 3 4))))
-       '(1 4 9 16))
+(define fact-source
+  '(define (fact n) (if (= n 1) 1 (* n (fact (- n 1))))))
+(define fib-source
+  '(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))
+(run-compiled fact-source)
+(run-compiled fib-source)
+(run-interpreted fact-source)
+(run-interpreted fib-source)
 
-; --- 5.5.3 末尾呼び出し — 翻訳された符号の側で測る ---
-; 5.4 で評価器について測ったのと同じ性質を、いま生成された命令列について測る。
-; **`compile-proc-appl` の3番目の場合が効いていなければ、ここで深さが伸びる。**
-(define (compiled-loop-depth n)
-  (run-compiled-seq
-   (list '(define (count n) (if (= n 0) (quote done) (count (- n 1))))
-         (list 'count n)))
-  (stack-max-depth last-machine))
-(check "5.5.3 反復のループが動く" (run-compiled-seq
-                                  (list '(define (count n)
-                                           (if (= n 0) (quote done) (count (- n 1))))
-                                        '(count 100)))
-       'done)
-(check "5.5.3 翻訳された末尾呼び出しは場所を食わない"
-       (= (compiled-loop-depth 10) (compiled-loop-depth 100)
-          (compiled-loop-depth 1000))
-       #t)
-(check "5.5.3 10000 回でも同じ" (= (compiled-loop-depth 10)
-                                   (compiled-loop-depth 10000)) #t)
-; 深さは 2 で止まる。**述語 `(= n 0)` を評価する間だけ env と continue を
-; 預けるためで、これは繰り返しの回数に依らない。** 積みっぱなしにならない
-; ことが末尾呼び出しの意味であって、1つも積まないことではない。
-(check "5.5.3 その深さは回数によらず 2" (compiled-loop-depth 1000) 2)
-; 再帰のほうは n に比例して積む。**翻訳しても、アルゴリズムの性質は変わらない。**
+; --- 3通りが同じ答えを出すこと（比較の前提）---
+(define (special-fact-of n)
+  (run special-fact (list (list 'n n)))
+  (get-register-contents special-fact 'val))
+(define (special-fib-of n)
+  (run special-fib (list (list 'n n)))
+  (get-register-contents special-fib 'val))
+
+(check "演習5.45 3通りが同じ階乗を出す"
+       (map (lambda (n) (let ((a (special-fact-of n))
+                              (b (run-compiled (list 'fact n)))
+                              (c (run-interpreted (list 'fact n))))
+                          (and (= a b) (= b c) a)))
+            '(1 2 5 10 15))
+       '(1 2 120 3628800 1307674368000))
+(check "演習5.46 3通りが同じ fib を出す"
+       (map (lambda (n) (let ((a (special-fib-of n))
+                              (b (run-compiled (list 'fib n)))
+                              (c (run-interpreted (list 'fib n))))
+                          (and (= a b) (= b c) a)))
+            '(0 1 5 10))
+       '(0 1 5 55))
+
+; ============================================================
+; 演習5.45 — 階乗で3通りを測る
+; ============================================================
+; 測るのは**押し込みの回数**（総仕事量に効く）と**最大の深さ**（要る場所）。
+; どちらも n の1次式になるので、n を2つ取れば傾きが出る。
+; **有理数が無い**（凍結仕様。`(/ 3 2)` は `1`）ので、比を取るときは
+; 実数に落とすか、掛け算で比べる。傾きは割り切れるので整数のままでよい。
+(define (slope f a b) (/ (- (f b) (f a)) (- b a)))
+(define (ratio a b) (/ (exact->inexact a) b))
+
+(define (special-fact-pushes n)
+  (special-fact-of n) (stack-pushes special-fact))
+(define (compiled-fact-pushes n)
+  (run-compiled (list 'fact n)) (stack-pushes compiled-machine))
+(define (interpreted-fact-pushes n)
+  (run-interpreted (list 'fact n)) (stack-pushes eceval))
+(define (special-fact-depth n)
+  (special-fact-of n) (stack-max-depth special-fact))
 (define (compiled-fact-depth n)
-  (run-compiled-seq
-   (list '(define (fact n) (if (= n 1) 1 (* n (fact (- n 1)))))
-         (list 'fact n)))
-  (stack-max-depth last-machine))
-(check "5.5.5 再帰の階乗は n に比例して積む"
-       (let ((d5 (compiled-fact-depth 5)) (d10 (compiled-fact-depth 10)))
-         (= (- d10 d5) (* 5 (/ (- d10 d5) 5))))
+  (run-compiled (list 'fact n)) (stack-max-depth compiled-machine))
+(define (interpreted-fact-depth n)
+  (run-interpreted (list 'fact n)) (stack-max-depth eceval))
+
+; 1段あたりに何回積むか。**これが3つのやり方の値打ちの差そのもの。**
+(check "演習5.45 専用の機械は1段あたり2回積む"
+       (slope special-fact-pushes 10 20) 2)
+(check "演習5.45 翻訳された符号の1段あたりの押し込み"
+       (slope compiled-fact-pushes 10 20) 6)
+(check "演習5.45 解釈の1段あたりの押し込み"
+       (slope interpreted-fact-pushes 10 20) 32)
+(check "演習5.45 順序は 専用 < 翻訳 < 解釈"
+       (< (slope special-fact-pushes 10 20)
+          (slope compiled-fact-pushes 10 20)
+          (slope interpreted-fact-pushes 10 20))
        #t)
-(check "5.5.5 深さの伸びが一定"
-       (let ((d5 (compiled-fact-depth 5))
-             (d10 (compiled-fact-depth 10))
-             (d15 (compiled-fact-depth 15)))
-         (= (- d10 d5) (- d15 d10)))
-       #t)
-
-; --- 5.5.4 preserving が要る所にだけ save を入れる ---
-; **変数の参照は何も壊さないので、退避は1つも入らない。**
-; 5.4 の評価器は同じ場面で continue と env と unev を積んでいた。
-(define (count-saves code)
-  (length (filter-save (statements code))))
-(define (filter-by-head head insts)
-  (cond ((null? insts) '())
-        ((and (pair? (car insts)) (eq? (car (car insts)) head))
-         (cons (car insts) (filter-by-head head (cdr insts))))
-        (else (filter-by-head head (cdr insts)))))
-(define (filter-perform insts) (filter-by-head 'perform insts))
-(define (filter-tests insts) (filter-by-head 'test insts))
-(define (filter-save insts)
-  (cond ((null? insts) '())
-        ((and (pair? (car insts)) (eq? (car (car insts)) 'save))
-         (cons (car insts) (filter-save (cdr insts))))
-        (else (filter-save (cdr insts)))))
-(check "5.5.4 変数の参照に save は入らない"
-       (count-saves (compile 'x 'val 'next)) 0)
-(check "5.5.4 定数にも入らない"
-       (count-saves (compile '5 'val 'next)) 0)
-(check "5.5.4 基本手続きの単純な適用でも入らない"
-       (count-saves (compile '(f) 'val 'next)) 0)
-; **引数が変数や定数なら、いくつ並んでも退避は入らない。** 引き当ては
-; どのレジスタも壊さないからで、これが 5.5.4 の名簿を持つ理由そのもの。
-(check "5.5.4 引数が変数だけなら退避は入らない"
-       (count-saves (compile '(f x y z) 'val 'next)) 0)
-; 引数の中に呼び出しがあると、その間 env が壊れるので退避が入る。
-(check "5.5.4 引数が呼び出しなら退避が入る"
-       (> (count-saves (compile '(f (g 1) (h 2)) 'val 'next)) 0) #t)
-(check "5.5.4 名簿は3つ組"
-       (length (compile '5 'val 'next)) 3)
-(check "5.5.4 変数の参照は env を要り、target を壊す"
-       (list (registers-needed (compile 'x 'val 'next))
-             (registers-modified (compile 'x 'val 'next)))
-       '((env) (val)))
-(check "5.5.4 定数は何も要らない"
-       (registers-needed (compile '5 'val 'next)) '())
-; preserving は「壊し、かつ要る」ときだけ入れる。片方だけなら入らない。
-(check "5.5.4 preserving は要らない退避を入れない"
-       (length (statements
-                (preserving '(env)
-                            (make-instruction-seq '() '(val) '((assign val (const 1))))
-                            (make-instruction-seq '(env) '() '((goto (reg env)))))))
-       2)
-(check "5.5.4 壊して、かつ要るときは入れる"
-       (length (statements
-                (preserving '(env)
-                            (make-instruction-seq '() '(env) '((assign env (const 1))))
-                            (make-instruction-seq '(env) '() '((goto (reg env)))))))
-       4)
-
-; --- 生成された符号が本当にレジスタ機械の言語であること ---
-(check "5.5 生成された命令は 5.1.5 の書式"
-       (let loop ((insts (statements (compile '(f (g x) 2) 'val 'next))))
-         (cond ((null? insts) #t)
-               ((symbol? (car insts)) (loop (cdr insts)))   ; ラベル
-               ((memq (car (car insts))
-                      '(assign test branch goto save restore perform))
-                (loop (cdr insts)))
-               (else (car insts))))
-       #t)
-(check "5.5 翻訳は式の大きさに比例した命令列を出す"
-       (< (length (statements (compile '(+ 1 2) 'val 'next)))
-          (length (statements (compile '(+ 1 (* 2 (- 3 4))) 'val 'next))))
-       #t)
-
-; ============================================================
-; 演習5.31 — どの退避が要らないか
-; ============================================================
-; 呼び出しの形ごとに、`preserving` が何本 save を入れるかを数える。
-; **演算子も被演算子も「壊さないもの」なら、退避は1本も要らない。**
-(check "演習5.31 (f (quote x) (quote y)) は退避ゼロ"
-       (count-saves (compile '(f (quote x) (quote y)) 'val 'next)) 0)
-; **演算子が呼び出しでも、そのあとに要る物が無ければ退避は入らない。**
-; 測って初めて分かった点で、「呼び出しがあるから退避が要る」ではない。
-(check "演習5.31 ((f) (quote x) (quote y)) も退避ゼロ"
-       (count-saves (compile '((f) (quote x) (quote y)) 'val 'next)) 0)
-; 引数に変数が混じると、演算子の呼び出しが env を壊すので1本入る。
-(check "演習5.31 ((f) (quote x) y) は env の退避が1本"
-       (count-saves (compile '((f) (quote x) y) 'val 'next)) 1)
-(check "演習5.31 (f (g (quote x)) y) は2本"
-       (count-saves (compile '(f (g (quote x)) y) 'val 'next)) 2)
-(check "演習5.31 (f (quote x) y) は退避ゼロ"
-       (count-saves (compile '(f (quote x) y) 'val 'next)) 0)
-(check "演習5.31 引数が変数と定数だけなら本数によらずゼロ"
-       (map (lambda (e) (count-saves (compile e 'val 'next)))
-            '((f) (f a) (f a b) (f a b c) (f a b c d)))
-       '(0 0 0 0 0))
-
-; ============================================================
-; 演習5.37 — 常に退避する版と比べる
-; ============================================================
-; `preserving` から名簿の判定を外し、**要求されたレジスタを必ず save/restore
-; する**版にすると、何本が無駄だったかが数で出る。
-(define smart-preserving preserving)
-(define (dumb-preserving regs seq1 seq2)
-  (if (null? regs)
-      (append-instruction-seqs seq1 seq2)
-      (let ((r (car regs)))
-        (dumb-preserving
-         (cdr regs)
-         (make-instruction-seq
-          (list-union (list r) (registers-needed seq1))
-          (list-difference (registers-modified seq1) (list r))
-          (append (list (list 'save r)) (statements seq1)
-                  (list (list 'restore r))))
-         seq2))))
-(define (count-saves-dumb exp)
-  (set! preserving dumb-preserving)
-  (let ((n (count-saves (compile exp 'val 'next))))
-    (set! preserving smart-preserving)
-    n))
-
-(check "演習5.37 常に退避すると本数が増える"
-       (> (count-saves-dumb '(f (g 1) (h 2)))
-          (count-saves (compile '(f (g 1) (h 2)) 'val 'next)))
-       #t)
-(check "演習5.37 退避ゼロだった形にも入るようになる"
-       (> (count-saves-dumb '(f a b)) 0) #t)
-(check "演習5.37 名簿が省いていた本数（階乗の本体）"
-       (let ((body '(define (fact n) (if (= n 1) 1 (* n (fact (- n 1)))))))
-         (> (- (count-saves-dumb body) (count-saves (compile body 'val 'next)))
-            5))
-       #t)
-; **常に退避しても答えは変わらない。** 名簿が効くのは速さであって正しさではない。
-(check "演習5.37 常に退避しても同じ答えを出す"
-       (begin (set! preserving dumb-preserving)
-              (let ((v (run-compiled-seq
-                        '((define (fact2 n) (if (= n 1) 1 (* n (fact2 (- n 1)))))
-                          (fact2 10)))))
-                (set! preserving smart-preserving)
-                v))
-       3628800)
-
-; ============================================================
-; 演習5.33・5.34 — 階乗の書き方を変える
-; ============================================================
-; 演習5.33 — `(* n (fact (- n 1)))` と `(* (fact (- n 1)) n)` を比べる。
-; **この翻訳系では、命令数も退避の本数も同じになる。** 実測した上での説明:
-; 被演算子は右から左へ評価される（5.5.3）ので、前者は呼び出しが先・変数が後、
-; 後者は変数が先・呼び出しが後になる。どちらの並びでも
-; 「呼び出しが1つ、変数が1つ」であることは変わらず、`preserving` が
-; 入れる本数も同じになる。**順序が効くのは、両側とも呼び出しのとき。**
-(check "演習5.33 書き方を変えても答えは同じ"
-       (run-compiled-seq
-        '((define (fact-a n) (if (= n 1) 1 (* n (fact-a (- n 1)))))
-          (define (fact-b n) (if (= n 1) 1 (* (fact-b (- n 1)) n)))
-          (list (fact-a 10) (fact-b 10))))
-       (list 3628800 3628800))
-(check "演習5.33 命令数も退避の本数も同じ"
-       (let ((a '(lambda (n) (* n (fact (- n 1)))))
-             (b '(lambda (n) (* (fact (- n 1)) n))))
-         (list (= (length (statements (compile a 'val 'next)))
-                  (length (statements (compile b 'val 'next))))
-               (= (count-saves (compile a 'val 'next))
-                  (count-saves (compile b 'val 'next)))))
-       (list #t #t))
-; 両側が呼び出しなら、順序を変えても本数は同じだが**中身の並びは変わる。**
-(check "演習5.33 両側が呼び出しのときは命令の並びが変わる"
-       (equal? (statements (compile '(* (g 1) (h 2)) 'val 'next))
-               (statements (compile '(* (h 2) (g 1)) 'val 'next)))
-       #f)
-
-; 演習5.34 — 反復の階乗を翻訳する。**同じ答えを、場所を食わずに出す。**
-; 再帰版との差は `compile-proc-appl` の3番目の場合が効くかどうかだけ。
-(define (compiled-fact-iter-depth n)
-  (run-compiled-seq
-   (list '(define (fact-iter n)
-            (define (iter product counter)
-              (if (> counter n) product (iter (* counter product) (+ counter 1))))
-            (iter 1 1))
-         (list 'fact-iter n)))
-  (stack-max-depth compiled-machine))
-(check "演習5.34 反復の階乗の答え"
-       (run-compiled-seq
-        (list '(define (fact-iter n)
-                 (define (iter product counter)
-                   (if (> counter n)
-                       product
-                       (iter (* counter product) (+ counter 1))))
-                 (iter 1 1))
-              '(fact-iter 20)))
-       2432902008176640000)
-(check "演習5.34 反復版は深さが n によらない"
-       (= (compiled-fact-iter-depth 10) (compiled-fact-iter-depth 100)) #t)
-(check "演習5.34 再帰版は深さが n に比例する"
-       (> (compiled-fact-depth 100) (compiled-fact-depth 10)) #t)
-(check "演習5.34 反復版と再帰版は同じ答え"
-       (= (run-compiled '(fact-iter 15)) (run-compiled '(fact 15))) #t)
-
-; ============================================================
-; 5.5.6 字句アドレス — 通した結果を見る（演習5.39〜5.44）
-; ============================================================
-; 定義は翻訳系より前に置いてある（この節の主題が 5.5.2 の変数の参照に
-; 効いているため）。ここでは**通した結果**を測る。
-
-; --- 演習5.41 アドレスの割り出し ---
-(define sample-ctenv '((y z) (a b c d e) (x y)))
-(check "演習5.41 いまの枠の先頭" (find-variable 'y sample-ctenv) '(0 0))
-(check "演習5.41 いまの枠の2番目" (find-variable 'z sample-ctenv) '(0 1))
-(check "演習5.41 1段外の枠" (find-variable 'c sample-ctenv) '(1 2))
-(check "演習5.41 2段外の枠" (find-variable 'x sample-ctenv) '(2 0))
-(check "演習5.41 内側の名前が外側を隠す" (find-variable 'y sample-ctenv) '(0 0))
-(check "演習5.41 見つからなければ大域" (find-variable 'w sample-ctenv) 'not-found)
-
-; --- 演習5.39 アドレスによる引き当て ---
-(define sample-env
-  (extend-environment
-   '(y z) '(10 20)
-   (extend-environment
-    '(a b c d e) '(1 2 3 4 5)
-    (extend-environment '(x y) '(100 200) the-empty-environment))))
-(check "演習5.39 アドレスで引ける"
-       (lexical-address-lookup (find-variable 'c sample-ctenv) sample-env) 3)
-(check "演習5.39 外の枠もアドレスで引ける"
-       (lexical-address-lookup (find-variable 'x sample-ctenv) sample-env) 100)
-; **名前で引いた結果と一致する。** これが字句アドレスが正しいことの意味。
-(check "演習5.39 名前で引いた結果と一致する"
-       (map (lambda (v)
-              (equal? (lexical-address-lookup (find-variable v sample-ctenv)
-                                              sample-env)
-                      (lookup-variable-value v sample-env)))
-            '(y z a b c d e x))
-       (list #t #t #t #t #t #t #t #t))
-(check "演習5.39 アドレスで書き換えられる"
-       (begin (lexical-address-set! (find-variable 'b sample-ctenv)
-                                    sample-env 99)
-              (lookup-variable-value 'b sample-env))
-       99)
-
-; --- 演習5.40・5.42 翻訳系が実際にアドレスを吐く ---
-; **これが 24日目から進んだ点。** 変数の参照だけを差し替える形をやめ、
-; 翻訳時環境を `compile` の全再帰に通したので、`lambda` の中の参照が
-; そのままアドレスになる。
-; 命令列の中の、最初の「変数を引く命令」を取り出す。
-(define (lookup-instruction? inst)
-  (and (pair? inst) (eq? (car inst) 'assign)
-       (pair? (caddr inst)) (eq? (car (caddr inst)) 'op)
-       (memq (cadr (caddr inst))
-             '(lookup-variable-value lexical-address-lookup))))
-(define (first-lookup-instruction code)
-  (let loop ((insts (statements code)))
-    (cond ((null? insts) 'none)
-          ((lookup-instruction? (car insts)) (car insts))
-          (else (loop (cdr insts))))))
-
-(check "演習5.42 大域名は名前で引く命令のまま"
-       (car (statements (compile 'w 'val 'next)))
-       '(assign val (op lookup-variable-value) (const w) (reg env)))
-(check "演習5.42 翻訳時環境に載っていればアドレスで引く"
-       (car (statements (compile-in 'c 'val 'next sample-ctenv)))
-       '(assign val (op lexical-address-lookup) (const (1 2)) (reg env)))
-(check "演習5.40 lambda の仮引数が枠を1つ足す"
-       (first-lookup-instruction (compile '(lambda (u v) u) 'val 'next))
-       '(assign val (op lexical-address-lookup) (const (0 0)) (reg env)))
-(check "演習5.40 2番目の仮引数"
-       (first-lookup-instruction (compile '(lambda (u v) v) 'val 'next))
-       '(assign val (op lexical-address-lookup) (const (0 1)) (reg env)))
-(check "演習5.40 入れ子の lambda は枠が2段"
-       (first-lookup-instruction
-        (compile '(lambda (u) (lambda (v) u)) 'val 'next))
-       '(assign val (op lexical-address-lookup) (const (1 0)) (reg env)))
-(check "演習5.40 内側の名前が外側を隠す"
-       (first-lookup-instruction
-        (compile '(lambda (u) (lambda (u) u)) 'val 'next))
-       '(assign val (op lexical-address-lookup) (const (0 0)) (reg env)))
-(check "演習5.40 大域名は lambda の中でも名前のまま"
-       (first-lookup-instruction (compile '(lambda (u) g) 'val 'next))
-       '(assign val (op lookup-variable-value) (const g) (reg env)))
-(check "演習5.42 set! もアドレスになる"
-       (memq 'lexical-address-set!
-             (map (lambda (i) (if (and (pair? i) (pair? (cadr i)))
-                                  (cadr (cadr i)) '?))
-                  (filter-perform (statements (compile '(lambda (u) (set! u 1))
-                                                       'val 'next)))))
-       '(lexical-address-set!))
-; **命令の数は変わらない。** 減るのは実行時の探索であって、命令ではない。
-(check "演習5.42 命令の数は変わらない"
-       (= (length (statements (compile-in 'c 'val 'next sample-ctenv)))
-          (length (statements (compile 'c 'val 'next))))
-       #t)
-
-; アドレスで引く符号が、実際に走って正しい値を出す。
-(check "演習5.40 アドレスで引く符号が走る"
-       (run-compiled '(((lambda (u v) (lambda (w) (+ u w))) 10 20) 5)) 15)
-(check "演習5.40 閉包の外の枠までアドレスで届く"
-       (run-compiled '(((lambda (u) (lambda (v) (+ u v))) 10) 5)) 15)
-(check "演習5.40 3段の入れ子"
-       (run-compiled '((((lambda (a) (lambda (b) (lambda (c) (+ a (+ b c)))))
-                         1) 2) 3))
-       6)
-(check "演習5.42 lambda の中の set! が走る"
-       (run-compiled '((lambda (u) (set! u 9) u) 1)) 9)
-
-; --- 演習5.43 内部定義を掃き出す ---
-; **本体の先頭の `define` を、枠に名前を並べてから `set!` に変える。**
-; これで内部定義された名前も枠の中で位置が決まり、字句アドレスで引ける。
-(check "演習5.43 掃き出しの形（名前を枠に並べ、定義は set! になる）"
-       (car (scan-out-defines '((define a 1) (define b 2) (+ a b))))
-       '((lambda (a b) (set! a 1) (set! b 2) (+ a b))
-         (quote *unassigned*) (quote *unassigned*)))
-(check "演習5.43 定義が無ければ何もしない"
-       (scan-out-defines '((+ 1 2))) '((+ 1 2)))
-(check "演習5.43 内部定義が走る"
-       (run-compiled '((lambda (x) (define y 10) (+ x y)) 5)) 15)
-(check "演習5.43 内部定義どうしが見える（相互再帰）"
-       (run-compiled-seq
-        '((define (parity n)
-            (define (ev? k) (if (= k 0) #t (od? (- k 1))))
-            (define (od? k) (if (= k 0) #f (ev? (- k 1))))
-            (list (ev? n) (od? n)))
-          (parity 10)))
-       (list #t #f))
-(check "演習5.43 内部定義も字句アドレスで引かれる"
-       (first-lookup-instruction
-        (compile '(lambda (x) (define y 1) y) 'val 'next))
-       '(assign val (op lexical-address-lookup) (const (0 0)) (reg env)))
-
-; --- 演習5.38・5.44 基本演算を開いて埋め込む ---
-; **`(+ a b)` のために手続きオブジェクトを作って argl を組む必要は無い。**
-; 引数を2本のレジスタに置いて、演算命令を1つ吐けばよい。
-; 演習5.44 が言うのは、**それをしてよいのは名前が隠されていないときだけ**
-; だということ。翻訳時環境があるから、そこが翻訳時に判定できる。
-(check "演習5.38 開いて埋め込むと命令が減る"
-       (< (length (statements (begin (set! open-coding? #t)
-                                     (compile '(+ 1 2) 'val 'next))))
-          (length (statements (begin (set! open-coding? #f)
-                                     (compile '(+ 1 2) 'val 'next)))))
-       #t)
-(check "演習5.38 埋め込んだ符号が走る"
-       (begin (set! open-coding? #t)
-              (let ((v (run-compiled '(+ (* 2 3) (- 10 4))))) 
-                (set! open-coding? #f) v))
-       12)
-(check "演習5.38 手続き呼び出しの分岐が消える"
-       (begin (set! open-coding? #t)
-              (let ((n (length (filter-tests (statements (compile '(+ 1 2) 'val 'next))))))
-                (set! open-coding? #f) n))
-       0)
-(check "演習5.44 名前が隠されていれば埋め込まない"
-       (begin (set! open-coding? #t)
-              (let ((code (compile '(lambda (+) (+ 1 2)) 'val 'next)))
-                (set! open-coding? #f)
-                (> (length (filter-tests (statements code))) 0)))
-       #t)
-(check "演習5.44 隠された + は利用者の手続きとして呼ばれる"
-       (begin (set! open-coding? #t)
-              (let ((v (run-compiled '((lambda (+) (+ 1 2))
-                                       (lambda (a b) (* a b))))))
-                (set! open-coding? #f) v))
-       2)
-(check "演習5.44 隠されていなければ埋め込む"
-       (begin (set! open-coding? #t)
-              (let ((n (length (filter-tests
-                                (statements (compile '(lambda (q) (+ q 1))
-                                                     'val 'next))))))
-                (set! open-coding? #f) n))
-       0)
-
-; ============================================================
-; 5.5.7 翻訳された符号と評価器をつなぐ
-; ============================================================
-; **翻訳された手続きと基本手続きは、呼び出し規約を共有している。**
-; proc に手続き、argl に引数、continue に帰り先。だから互いを呼べる。
-; 5.4 の評価器がこの規約で書かれているのは、そのためである。
-(check "5.5.7 翻訳された手続きが基本手続きを呼ぶ"
-       (run-compiled-seq '((define (inc x) (+ x 1)) (inc 41))) 42)
-(check "5.5.7 翻訳された手続きを引数に渡せる"
-       (run-compiled-seq
-        '((define (twice f x) (f (f x)))
-          (twice (lambda (n) (* n n)) 3)))
-       81)
-(check "5.5.7 翻訳された手続きを返せる"
-       (run-compiled-seq
-        '((define (adder n) (lambda (x) (+ x n)))
-          ((adder 10) 5)))
-       15)
-(check "5.5.7 大域環境は式をまたいで残る"
-       (run-compiled-seq '((define counter 0)
-                           (define (bump) (set! counter (+ counter 1)) counter)
-                           (bump) (bump) (bump)))
+; **翻訳は専用の機械の 3 倍、解釈はさらにその 5.3 倍（専用の 16 倍）。**
+; 5.5 の冒頭の主張「翻訳は解釈より速い」が数で出る。
+(check "演習5.45 翻訳は専用の機械の3倍積む"
+       (/ (slope compiled-fact-pushes 10 20)
+          (slope special-fact-pushes 10 20))
        3)
-(check "5.5.7 同じ機械に命令を積み込み続ける"
-       (> (length (statements (compile '(bump) 'val 'next))) 0) #t)
+(check "演習5.45 解釈は専用の機械の16倍積む"
+       (/ (slope interpreted-fact-pushes 10 20)
+          (slope special-fact-pushes 10 20))
+       16)
+(check "演習5.45 解釈は翻訳の5倍強を積む"
+       (ratio (slope interpreted-fact-pushes 10 20)
+              (slope compiled-fact-pushes 10 20))
+       (/ 32.0 6))
 
-; --- 翻訳系と評価器の対比（5.5 全体の主張） ---
-; 同じ式について、翻訳された符号のほうが実行する命令が少ない。
-; **構文の場合分けが翻訳時に済んでいるから。**
-(define (compiled-fact-insts n)
-  (run-compiled-seq
-   (list '(define (fact n) (if (= n 1) 1 (* n (fact (- n 1)))))
-         (list 'fact n)))
-  (inst-count compiled-machine))
-(check "5.5 翻訳された階乗の命令数は n に正比例する"
-       ; 1段あたりの命令数が一定であること = 構文の場合分けが残っていないこと。
-       ; 解釈系なら段ごとに式の型を見直すので、ここは一定にならない。
-       (let ((i5 (compiled-fact-insts 5))
-             (i10 (compiled-fact-insts 10))
-             (i15 (compiled-fact-insts 15)))
-         (= (- i10 i5) (- i15 i10)))
+; **深さは押し込みと同じ順序にはならない。** ここが測って初めて分かった点で、
+; 翻訳と解釈は深さの傾きが同じ 3 であり、差は定数（+6）でしかない。
+;   専用   押し込み 2n-2   深さ 2n-2
+;   翻訳   押し込み 6n-4   深さ 3n-1
+;   解釈   押し込み 32n-16 深さ 3n+5
+; **解釈の高くつく所は「要る場所」ではなく「した仕事の量」である。**
+; 1段ごとに積んでは降ろすものが大量にあり、その大半は同じ段の中で解ける。
+(check "演習5.45 専用の機械の深さの傾き" (slope special-fact-depth 10 20) 2)
+(check "演習5.45 翻訳された符号の深さの傾き" (slope compiled-fact-depth 10 20) 3)
+(check "演習5.45 解釈の深さの傾き" (slope interpreted-fact-depth 10 20) 3)
+(check "演習5.45 翻訳と解釈は深さの傾きが同じ"
+       (= (slope compiled-fact-depth 10 20)
+          (slope interpreted-fact-depth 10 20))
        #t)
-(check "5.5 1段あたりの命令数"
-       (- (compiled-fact-insts 10) (compiled-fact-insts 9)) 47)
-(check "5.5 翻訳された符号にも scheme13 と同じ2つの呼び出しがある"
-       ; 末尾（continue を積まない）と非末尾（積む）の2通り
-       (list (length (statements (compile-proc-appl 'val 'return)))
-             (length (statements (compile-proc-appl 'val 'somelabel))))
-       '(2 3))
+(check "演習5.45 差は定数（同じ n での深さの差）"
+       (= (- (interpreted-fact-depth 10) (compiled-fact-depth 10))
+          (- (interpreted-fact-depth 20) (compiled-fact-depth 20)))
+       #t)
+(check "演習5.45 押し込みの側は3通りとも違う"
+       (< (slope special-fact-pushes 10 20)
+          (slope compiled-fact-pushes 10 20)
+          (slope interpreted-fact-pushes 10 20))
+       #t)
 
-(summary "SICP 5.5")
+; 実行命令数でも見る。**翻訳された符号は構文の場合分けを1度も実行しない**
+; ので、解釈より1桁近く少ない。
+(define (compiled-fact-insts n)
+  (run-compiled (list 'fact n)) (inst-count compiled-machine))
+(define (interpreted-fact-insts n)
+  (run-interpreted (list 'fact n)) (inst-count eceval))
+(check "演習5.45 解釈のほうが実行命令数が多い"
+       (> (interpreted-fact-insts 20) (* 4 (compiled-fact-insts 20))) #t)
+(check "演習5.45 どちらも n の1次式"
+       (= (slope compiled-fact-insts 10 20) (slope compiled-fact-insts 20 30))
+       #t)
+
+; ============================================================
+; 演習5.46 — 木の再帰でも同じ傾向か
+; ============================================================
+; fib は呼び出しの回数が fib(n) で増えるので、押し込みは n の1次式にならない。
+; **比べるのは傾きではなく比**になる。
+(define (special-fib-pushes n)
+  (special-fib-of n) (stack-pushes special-fib))
+(define (compiled-fib-pushes n)
+  (run-compiled (list 'fib n)) (stack-pushes compiled-machine))
+(define (interpreted-fib-pushes n)
+  (run-interpreted (list 'fib n)) (stack-pushes eceval))
+
+(check "演習5.46 木の再帰でも 専用 < 翻訳 < 解釈"
+       (< (special-fib-pushes 10) (compiled-fib-pushes 10)
+          (interpreted-fib-pushes 10))
+       #t)
+(check "演習5.46 比は n によらずほぼ一定（翻訳/専用）"
+       (let ((r10 (ratio (compiled-fib-pushes 10) (special-fib-pushes 10)))
+             (r14 (ratio (compiled-fib-pushes 14) (special-fib-pushes 14))))
+         (< (abs (- r10 r14)) 0.1))
+       #t)
+(check "演習5.46 比は n によらずほぼ一定（解釈/翻訳）"
+       (let ((r10 (ratio (interpreted-fib-pushes 10) (compiled-fib-pushes 10)))
+             (r14 (ratio (interpreted-fib-pushes 14) (compiled-fib-pushes 14))))
+         (< (abs (- r10 r14)) 0.1))
+       #t)
+; 深さは n の1次式のまま（木の深さは n）。**押し込みだけが指数で増える。**
+(check "演習5.46 深さは3通りとも n の1次式"
+       (let ((f (lambda (g) (= (- (g 10) (g 8)) (- (g 14) (g 12))))))
+         (list (f (lambda (n) (begin (special-fib-of n)
+                                     (stack-max-depth special-fib))))
+               (f (lambda (n) (begin (run-compiled (list 'fib n))
+                                     (stack-max-depth compiled-machine))))
+               (f (lambda (n) (begin (run-interpreted (list 'fib n))
+                                     (stack-max-depth eceval))))))
+       (list #t #t #t))
+
+; ============================================================
+; 分かったこと（この比較そのものの主張）
+; ============================================================
+(check "5.5 翻訳は専用の機械に近く、解釈からは遠い"
+       (let ((s (slope special-fact-pushes 10 20))
+             (c (slope compiled-fact-pushes 10 20))
+             (i (slope interpreted-fact-pushes 10 20)))
+         (< (- c s) (- i c)))
+       #t)
+; 押し込みの式そのものを固定しておく。**翻訳系や評価器を触れば、
+; ここが真っ先に動く。**
+(check "5.5 3通りの押し込みの式（n=5,10,15,20）"
+       (list (map special-fact-pushes '(5 10 15 20))
+             (map compiled-fact-pushes '(5 10 15 20))
+             (map interpreted-fact-pushes '(5 10 15 20)))
+       '((8 18 28 38) (26 56 86 116) (144 304 464 624)))
+; **末尾呼び出しは3通りとも成立する。** どのやり方でも、反復のループは
+; 定数の場所で回る（5.4.2 と 5.5.3 でそれぞれ確かめた性質が、
+; ここで同じ土俵に乗る）。
+(run-compiled '(define (count n) (if (= n 0) (quote done) (count (- n 1)))))
+(run-interpreted '(define (count n) (if (= n 0) (quote done) (count (- n 1)))))
+(check "5.4/5.5 翻訳された末尾呼び出しは定数の場所"
+       (= (begin (run-compiled '(count 100)) (stack-max-depth compiled-machine))
+          (begin (run-compiled '(count 1000)) (stack-max-depth compiled-machine)))
+       #t)
+(check "5.4/5.5 解釈された末尾呼び出しも定数の場所"
+       (= (begin (run-interpreted '(count 100)) (stack-max-depth eceval))
+          (begin (run-interpreted '(count 1000)) (stack-max-depth eceval)))
+       #t)
+(check "5.4/5.5 ただし解釈のほうが深く積む"
+       (> (begin (run-interpreted '(count 100)) (stack-max-depth eceval))
+          (begin (run-compiled '(count 100)) (stack-max-depth compiled-machine)))
+       #t)
+
+(summary "SICP 5.45-5.46")
