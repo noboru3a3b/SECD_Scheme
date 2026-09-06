@@ -3966,8 +3966,16 @@ static ValuePtr prim_help(ValuePtr*, std::size_t) {
 === scheme13 Debug Commands ===
 
 NOTE: This implementation notes:
+  - Numbers are exact integers (fixnum/bignum) or inexact reals (IEEE 754 double).
+    There are no rationals and no complex numbers.
+  - (/ 1 3) is 0, NOT 1/3.  Division of exact integers truncates toward zero,
+    just as it always has.  Write (/ 1.0 3) or (exact->inexact ...) when you
+    want a real result.  This is by design, not a bug.
+  - Any inexact argument makes the result inexact: (+ 1 1.5) is 2.5
   - (/ x) single-argument division is NOT supported (use (/ 1 x) or avoid)
-  - eq? and eqv? both perform value comparison on numbers
+  - eq? and eqv? both perform value comparison on numbers, but the exactness
+    must match too: (= 1 1.0) is TRUE while (eqv? 1 1.0) is FALSE
+  - Comparisons involving +nan.0 are all FALSE, (>= +nan.0 1) included
   - Square brackets [] are NOT supported (use parentheses only)
   - Characters are represented as length-1 strings
   - EOF is a dedicated object type (not a symbol)

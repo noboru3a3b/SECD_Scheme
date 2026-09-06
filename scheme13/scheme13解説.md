@@ -1,8 +1,8 @@
-# scheme13 解説文書（v1.3）
+# scheme13 解説文書（v1.4）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
-対象は `scheme13/scheme13.cpp`（単一ファイル、4,775 行）と
-`scheme13/lib13.scm`（221 行）。
+対象は `scheme13/scheme13.cpp`（単一ファイル、5,249 行）と
+`scheme13/lib13.scm`（277 行）。
 
 `scheme12_debug`（`scheme12_bignum_boost_debug.cpp`）を、一貫した設計思想の
 もとで書き直したものである。**振る舞いは互換、設計は選び直した。**
@@ -25,11 +25,18 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 
 **この文書は実装に追随させる。** 処理系の振る舞いを変えたら、ここも直すこと。
 とくにずれやすいのは第7章（命令一覧）、第10章（プリミティブ一覧と個数）、
-第12章（テストの件数）、第13章（互換性）、付録C（エラー一覧）である。
+第12章（テストの件数）、第13章（互換性）、**第14.1節（R5RS の不足）**、
+付録C（エラー一覧）である。**第14.1節は「無い」という主張なので、
+前提が動くと黙って嘘になる**（22日目に実際にそうなった）。
 
 追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
 出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
 
+> **v1.4 で追ったもの**: **浮動小数点数**（18〜21日目）。値モデル（第2章）、
+> リーダ（第4章）、プリミティブ一覧と個数（第10章）、テストの件数（第12章）、
+> 互換性（第13章）、既知の制限（第14章）、エラー一覧（付録C）。
+> **第14.1節の「R5RS の不足ゼロ」を取り下げた**（実数を入れると数の側が開き直る）。
+>
 > **v1.3 で追ったもの**: `macro-print`（第11.4節）、原典との差の総ざらい（第13章）。
 >
 > **v1.2 で追ったもの**: `exit` / `quit`（第10.11節）、テストの件数（第12.2節）。
@@ -242,6 +249,7 @@ static inline ValuePtr make_fixnum(std::intptr_t n) {
 | --- | --- | --- |
 | `Fixnum` | （ポインタに埋め込み） | 小さい整数 |
 | `Bignum` | `Bignum` | `BigInt` を持つ多倍長整数 |
+| `Flonum` | `Flonum` | 不正確な実数（IEEE 754 binary64）。**即値にはしない**（第2.5節） |
 | `Nil` | シングルトン `g_nil` | 空リスト |
 | `Boolean` | シングルトン `g_true` / `g_false` | 真偽値 |
 | `String` | `Str` | 可変長文字列（`GcString`）。**文字型は存在しない** |
@@ -262,8 +270,10 @@ static inline ValuePtr make_fixnum(std::intptr_t n) {
 - **文字型が存在しない。文字は長さ1の文字列。**
   `(string-ref "abc" 1)` は `"b"`、`(integer->char 65)` は `"A"`
 - `eq?` と `eqv?` は同一実装。**数値は値比較**、シンボルは名前比較、
-  文字列はポインタ比較（`(eq? "a" "a")` は `FALSE`）
-- **整数のみ。** 有理数・実数・複素数はない
+  文字列はポインタ比較（`(eq? "a" "a")` は `FALSE`）。
+  **数の値比較は正確さが一致して初めて真**で、`(eqv? 1 1.0)` は `FALSE`、
+  `(= 1 1.0)` は `TRUE`（第2.5節）
+- **正確な整数と不正確な実数の2階建て。** 有理数・複素数はない
 - 偽は `#f` ただ一つ。`nil` も `0` も空文字列も真
 
 `Template` はクロージャの「型紙」で、複数のクロージャが共有する。
@@ -309,6 +319,25 @@ struct Template : public gc {
 | `(values 1 2)` | `#<values 1 2>` |
 | `(values)` | `#<values>` |
 
+**実数の表示**（18日目の決定90）。`std::to_chars` の shortest round-trip に
+3つの後処理をかけて Scheme の形に寄せる（`.`/`e` が無ければ `.0` を足す、
+指数の `+` を落とす、指数の先頭の 0 を落とす）。無限大と非数は
+`to_chars` に渡さず R7RS の綴りで出す。
+
+| 式 | 出力 |
+| --- | --- |
+| `1.5` | `1.5` |
+| `1.0` / `(* 2.0 3.0)` | `1.0` / `6.0` （**実数は必ず `.` か `e` を含む**） |
+| `(/ 1.0 3)` | `0.3333333333333333` |
+| `(+ 0.1 0.2)` | `0.30000000000000004` （**丸めて隠さない**） |
+| `1e21` / `1e-7` / `-0.0` | `1e21` / `1e-7` / `-0.0` |
+| 無限大・非数 | `+inf.0` / `-inf.0` / `+nan.0` |
+
+**`(+ 0.1 0.2)` を `0.3` に見せない。** 固定桁で「きれいに」出すと、表示が
+同じなのに `(= (+ 0.1 0.2) 0.3)` が `FALSE` という最悪の組み合わせになる。
+第1章の「デバッグ機能は一級市民」に照らせば、**見えている数がメモリにある数で
+あること**のほうが大事である。`number->string` も同じ関数で作る（書式を2つ持たない）。
+
 `display` と `write` の違いは**文字列を引用符で囲むかどうかだけ**。
 リストの要素にある文字列は `display` でも引用符つきで出る（`("x" y)`）。
 
@@ -317,6 +346,10 @@ struct Template : public gc {
 > 出力をもう一度読むと別の値になる。`write` の出力を入力に使う道具
 > （`--read` / `--expand`）はこの前提で作られている。文字列のエスケープを
 > しない仕様も同じ性質を持つ。
+>
+> **例外は数である。** 実数は「読み戻すと同じ値になる最短形」で出すので、
+> 書いた出力をもう一度読むとビット列まで一致する（決定90。正規数・非正規数・
+> 両端を含む18個で実測）。
 
 ### 2.4 循環構造
 
@@ -347,9 +380,13 @@ struct Template : public gc {
    `(let ((x '(1))) (list x x))` のような**共有はあるが循環でない**構造を
    循環と誤検出する
 
-### 2.5 数値: fixnum と bignum の境界
+### 2.5 数値: 3つの表現と、向きの逆な2つの規律
 
-**規律**（`dev_memo.md` §9）。算術に手を入れるときは必ず守ること。
+数は **正確な整数**（即値 fixnum とヒープ `Bignum`）と **不正確な実数**
+（ヒープ `Flonum`、IEEE 754 binary64）の2階建てである（18日目の決定81）。
+有理数と複素数は無い。
+
+**規律その1: 整数は表現を1つに正規化する**（`dev_memo.md` §9）。
 
 - fixnum どうしの演算は `__builtin_*_overflow` で検査し、溢れたら bignum へ
 - **bignum 演算の結果が fixnum に収まったら必ず fixnum に落とす**
@@ -365,12 +402,53 @@ struct Template : public gc {
 (eq? (- (* 4611686018427387903 2) 9223372036854775805) 1)   ; => TRUE
 ```
 
+**規律その2: 実数は正確さをまたいで正規化しない**（18日目の決定85）。
+**向きが逆なので、`make_int` の感覚で `make_flonum` を書くと必ず間違える。**
+
+- `(* 2.0 3.0)` は `6.0` であって `6` ではない
+- `(floor 2.5)` は `2.0` であって `2` ではない
+- 破ると `exact?` の答えが値で変わり、`eqv?` の結果も変わる
+
+`Flonum` は**ポインタを1つも持たないので走査しないヒープから確保する**
+（`new (PointerFreeGC)`。決定84）。double のビット列を保守的 GC が
+ポインタと誤解して掴み続けるのを防ぐ。ヘッダ12バイト + double 8バイト = 24 バイト。
+
+**即値にはしない。** 64ビットの double は、最下位1ビットをタグに使う即値方式に
+入らない。NaN ボクシングで値表現ごと作り直す案は、`ValuePtr` を触る全コードに
+波及するので却下した（決定84）。
+
 算術の凍結仕様（`dev_memo.md` §2.3）:
 
-- `(/ -7 2)` は `-3`（0方向への切り捨て。`quotient` 相当）
-- `(/ x)` は**エラー**。単項の逆数は整数では表せない
+- **伝播規則: 引数に不正確な数が1つでもあれば、結果も不正確。**
+  `(+ 1 1.5)` は `2.5`、`(* 2 3.0)` は `6.0`
+- **`/` は引数がすべて正確な整数なら0方向への切り捨て**（`quotient` 相当）。
+  `(/ -7 2)` は `-3`、`(/ 1 3)` は `0`、`(/ 7 2.0)` は `3.5`。
+  **これが R5RS から最も遠い1点**で、18日目に利用者が3案から選んだ（決定82）。
+  SICP のような実数前提のコードは `(/ 1.0 3)` と書く
+- `(/ x)` は**引数の型によらずエラー**。型で arity を変えない
 - `(modulo -7 2)` は `1`、`(modulo 7 -2)` は `-1`（符号は除数に一致）
 - `(remainder -7 2)` は `-1`、`(remainder 7 -2)` は `1`（符号は被除数に一致）
+- **`modulo` / `quotient` / `remainder` / `even?` / `odd?` と、添字・長さ・
+  文字コードは正確な整数だけを受ける。** `(vector-ref v 1.0)` はエラー（決定92）
+- **NaN が混ざったらどの比較も偽**（決定87）。`(< +nan.0 1)` も
+  `(>= +nan.0 1)` も `FALSE`。そのため `num_cmp` は3値ではなく
+  **4状態（`LT` / `EQ` / `GT` / `Unordered`）**を返す。
+  `>=` を「`<` の否定」で書いてはいけない
+- 整数と実数の比較は整数を倍精度に寄せる。**2^53 を超える整数では桁が落ちる**
+  （正確に比べるには有理数が要る。決定88）
+- **実数の演算は IEEE 754 に従い、例外にしない。** `(/ 1.0 0.0)` は `+inf.0`、
+  `(log 0)` は `-inf.0`、`(log -1)` は `+nan.0`。
+  例外は `sqrt` の負の引数だけで、これは答えが虚数なので表せない（決定105・106）
+
+```scheme
+(+ 1 1.5)      ; => 2.5
+(/ 7 2)        ; => 3
+(/ 7 2.0)      ; => 3.5
+(= 1 1.0)      ; => TRUE
+(eqv? 1 1.0)   ; => FALSE
+(sqrt 16)      ; => 4
+(sqrt 2)       ; => 1.4142135623730951
+```
 
 ---
 
@@ -547,7 +625,9 @@ Fatal error: t.scm:1:1: sqrt: argument out of range
 
 | 記法 | 読まれ方 |
 | --- | --- |
-| `123` `-45` | 整数（fixnum または bignum） |
+| `123` `-45` `+5` | 整数（fixnum または bignum） |
+| `1.5` `-0.75` `.5` `1.` `1e10` `1.5e-3` `+2.5E7` | 実数（18日目の決定89） |
+| `+inf.0` `-inf.0` `+nan.0` `-nan.0` | 無限大と非数（R7RS の綴り） |
 | `abc` `AbC` | シンボル（**大小文字を保存**） |
 | `"..."` | 文字列。`\n` `\t` `\\` `\"` のエスケープを解釈する |
 | `#t` `#f` | 真偽値 |
@@ -565,6 +645,13 @@ Fatal error: t.scm:1:1: sqrt: argument out of range
   2つのシンボルとして読まれる（結果として `unbound variable: 2]`）
 - `,@` は内部的に `splice` というシンボルに読まれる
 - 準クオートのネスト（`` `(a `(b ,,x)) ``）は未対応
+- **数かどうかの判定は自前でやる**（`parse_number()`。決定89）。
+  `std::from_chars` は `inf` / `nan` / `infinity` を受け付けるので、判定まで
+  任せるとシンボル `inf` が数に化ける（実測）。**トークン全体が上の形に
+  一致したときだけ数**で、`1/2` `1.2.3` `1e` はシンボルのまま
+  （有理数は無い）。**`string->number` も同じ関数を使う**（文法を2つ持たない）
+- ドット対とは衝突しない。`.` がドットになるのは次が区切り文字のときだけなので、
+  `(a .5)` は `a` と `0.5` の2要素、`(a . 5)` はドット対
 
 ### 4.2 位置の記録
 
@@ -1165,22 +1252,22 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | 層 | 実体 | 個数 |
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
-| プリミティブ | C++ の関数ポインタ | 113 |
-| ライブラリ | Scheme で書かれた定義 | 70（`system_lib.scm` 33 + `lib13.scm` 37） |
+| プリミティブ | C++ の関数ポインタ | 135 |
+| ライブラリ | Scheme で書かれた定義 | 61（`system_lib.scm` 33 + `lib13.scm` 28） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **211 個**の大域名が起動時に定義される。数え方:
+合計 **224 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 211
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 113
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 224
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 135
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
-`%` で始まる6つは**内部名**で、利用者が直接呼ぶものではない（決定60）。
+`%` で始まる9つは**内部名**で、利用者が直接呼ぶものではない（決定60）。
 C++ 側の `%values->list` / `%wind-push` / `%wind-pop` / `%wind-top-after` /
-`%exit`（第10.10節・第8.3節・第10.11節）と、
-`lib13.scm` の `%list-tail-checked`（第10.6節）である。
+`%exit`（第10.10節・第8.3節・第10.11節）と `%sqrt` / `%expt`（第10.3節）、
+`lib13.scm` の `%list-tail-checked` / `%isqrt`（第10.6節）である。
 
 `system_lib.scm` は 34 個の `define` と 1 個の `define-macro`（`delay`）を
 持つが、`cdddr` と `memv` はプリミティブが先に定義済みなので読み飛ばされ、
@@ -1197,7 +1284,7 @@ let  let*  letrec  and  or  cond  case  do  quasiquote
 **値としては特殊形式オブジェクト**として大域に束縛されている。
 `(procedure? call/cc)` が `FALSE` なのはこのため。
 
-### 10.3 プリミティブ（113）
+### 10.3 プリミティブ（135）
 
 ```cpp
 using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
@@ -1210,6 +1297,9 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | --- | --- |
 | 算術 | `+` `-` `*` `/` `modulo` |
 | 比較 | `=` `<` `>` `<=` `>=` |
+| 正確さ | `exact?` `inexact?` `integer?` `rational?` `real?` `complex?` `exact->inexact` `inexact->exact` |
+| 丸め | `floor` `ceiling` `truncate` `round` |
+| 超越関数 | `%sqrt` `%expt` `exp` `log` `sin` `cos` `tan` `asin` `acos` `atan` |
 | ペア・リスト | `cons` `car` `cdr` `set-car!` `set-cdr!` `caar` `cadr` `cdar` `cddr` `caddr` `cdddr` `list` `length` `append` `list?` `memq` `memv` `assq` |
 | 述語 | `eq?` `eqv?` `equal?` `null?` `pair?` `atom?` `number?` `string?` `symbol?` `vector?` `boolean?` `procedure?` `eof-object?` `not` |
 | 文字列 | `string-length` `string-ref` `string-set!` `make-string` `string-append` `substring` `string=?` `string<?` `string>?` `string<=?` `string>=?` `char->integer` `integer->char` `string->list` `list->string` `symbol->string` `string->symbol` `number->string` `string->number` |
@@ -1225,6 +1315,15 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 
 `memv` は `memq` と同じ実装。**`memq` / `assq` は数値を値で比べる**
 （scheme12 はポインタ比較）。理由は第13章。
+
+**「正確さ」「丸め」「超越関数」の22個は18〜21日目に足したもの**で、どれも
+値の表現を見るか double を要するため Scheme では書けない（第14.3節の線引き）。
+`%sqrt` と `%expt` は内部用で、`lib13.scm` の `sqrt` / `expt` が
+「正確な道」を先に試し、外れたときだけここへ落とす（第10.6節）。
+
+**定義域の外でも例外にしない。** `(log 0)` は `-inf.0`、`(log -1)` と
+`(asin 2)` は `+nan.0`（決定105）。`(/ 1.0 0.0)` を `+inf.0` にしたのと同じ扱いで、
+**実数の演算で例外を投げる場所を1つも作らない**という線である。
 
 ### 10.4 エラー報告の入口
 
@@ -1247,7 +1346,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 | ファイル | 中身 | 所有 |
 | --- | --- | --- |
 | `system_lib.scm` | `map` `filter` `for-each` `fold-left` `fold-right` `reverse` `memv` `assv` `caaar` 系、遅延評価（`delay`/`force`）、キュー、素数、その他 | **scheme12 と共有。触らない** |
-| `scheme13/lib13.scm` | R5RS にあって scheme13 に無かった 35 個 | scheme13 |
+| `scheme13/lib13.scm` | R5RS にあって scheme13 に無かったもの（26 個）＋ `exit` / `quit` | scheme13 |
 
 **順序に意味がある。** `load_library_dedup` は定義済みの名前を飛ばすので、
 先に読んだほうが勝つ。`system_lib.scm` を先に読むことで、**既存資産の
@@ -1263,7 +1362,7 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 理由づけ自体は正しい（C++ のループフレームは継続に素通りされない）ので、
 **将来これらをプリミティブ化しようとするときは、この点を思い出すこと。**
 
-### 10.6 lib13.scm（35）
+### 10.6 lib13.scm（28）
 
 入れる基準は **「R5RS にあって scheme13 に無いもの」の一本**。
 `sort` / `reduce` / `string-upcase` のような便利な非標準手続きは入れない
@@ -1271,23 +1370,36 @@ using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
 
 | 分類 | 名前 |
 | --- | --- |
-| 数値述語 | `integer?` `rational?` `real?` `complex?` `exact?` `inexact?` `zero?` `positive?` `negative?` `even?` `odd?` |
+| 数値述語 | `zero?` `positive?` `negative?` `even?` `odd?` |
 | 算術 | `abs` `max` `min` `quotient` `remainder` `gcd` `lcm` `expt` `sqrt` |
-| 丸め | `floor` `ceiling` `truncate` `round` |
 | リスト | `list-tail` `list-ref` `member` `assoc` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
 | 多値・動的拡張 | `call-with-values` `dynamic-wind` |
 | 終了 | `exit` `quit`（**R5RS 外**。第10.11節） |
-| 内部ヘルパ | `%list-tail-checked` |
+| 内部ヘルパ | `%list-tail-checked` `%isqrt` |
+
+**ここに置くのは「`=` や `<` や算術だけで書けるもの」に限る**（20日目の決定104）。
+値の**表現**を見る手続き（`integer?` / `exact?` / `floor` / `exact->inexact` など
+10個）は、実数が入った20日目に C++ へ移した。`lib13.scm` は
+`system_lib.scm` の**後**に読まれるので、**残しておくと C++ 側を上書きしてしまう。
+消すのは義務であって好みではない。**
 
 凍結仕様に合わせた判断:
 
-- 整数しか無いので、数値塔の述語（`integer?` / `rational?` / `real?` /
-  `complex?`）はすべて `number?` に潰れる。整数は有理数でも実数でも複素数でも
-  あるので嘘ではない。`exact?` は常に真、`inexact?` は常に偽
-- **`sqrt` は平方根の整数部**を返す。R5RS の「正確でなければ不正確な数を
-  返す」は、不正確な数が無いので採れない
-- **`expt` の負の指数と `sqrt` の負の引数はエラー。** 黙って 0 を返さない
+- **`abs` / `zero?` / `positive?` / `negative?` は `<` `>` `=` と `-` だけで
+  書いてある。** 実数が入っても触っていない。伝播規則に乗るだけで正しく動く
+  （`(abs -1.5)` は `1.5`、`(zero? 0.0)` は `TRUE`）
+- **`sqrt` と `expt` は「正確な道を先に試す」**（21日目の決定106）。
+  `sqrt` は引数が正確ならまず `%isqrt` で平方根の整数部を求め、二乗して元に
+  戻ればその整数を返す（`(sqrt 16)` は `4`）。戻らなければ `%sqrt` で実数
+  （`(sqrt 2)` は `1.4142135623730951`）。`expt` は底も指数も正確で指数が
+  0以上なら繰り返し二乗、それ以外は `%expt`（`(expt 2 -3)` は `0.125`）。
+  **順序が仕様である。** 先に `%expt` へ渡すと `(expt 2 100)` が倍精度に丸まる
+- **`sqrt` の負の引数はエラーのまま。** 実数を入れても答えは虚数のままで、
+  `+nan.0` を返すと「数でない」と嘘をつくことになる
+- **`max` / `min` は引数に不正確が1つでもあれば結果も不正確**（R5RS。決定108）。
+  `(max 2 1.0)` は `2.0`。畳み込みの状態を2つ持ち、最後に1度だけ変換する。
+  選ぶ側で `exact->inexact` を挟むと、選ばれなかった側の不正確さが消える
 - `floor` / `ceiling` / `truncate` / `round` は整数では恒等。名前を
   受け付けること自体に意味がある（他所のコードがそのまま動く）
 - `string` は文字が長さ1の文字列なので `string-append` そのもの
@@ -1751,7 +1863,7 @@ make -C scheme13 test       #  24 passed — 既存 .scm 資産との互換性�
 make -C scheme13 bench      # 呼び出し性能
 ```
 
-### 12.1 --selftest（183項目）
+### 12.1 --selftest（265項目）
 
 処理系を C++ 単体で検査する。**起動時ライブラリを読む前に走る**ので、
 ここで見られるのは処理系そのものだけである。
@@ -1778,7 +1890,7 @@ make -C scheme13 bench      # 呼び出し性能
 | ファイル | 例外の理由 |
 | --- | --- |
 | `test-case6.scm` | scheme13 でテスト機構を復活させたため、出力そのものが別物 |
-| `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト。scheme12 に比べる相手が無い |
+| `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト（**153項目**）。scheme12 に比べる相手が無い |
 | `scheme13/tests/port_test.scm` | 同上（ポート。第10.9節） |
 | `scheme13/tests/exit_test.scm` | 同上（`exit`。第10.11節） |
 | `scheme13/tests/macro_print_test.scm` | 同上（`macro-print`。第11.4節） |
@@ -1791,6 +1903,15 @@ make -C scheme13 bench      # 呼び出し性能
   `(quit)`）。1つの `.scm` では一度しか終われないので、ゴールデンでは
   `(exit 3)` の1通りしか見られない。残りは `run_golden.sh` が式ごとに走らせる。
   `exit_test.scm` のほうは `dynamic-wind` との絡み（第10.11節）を見ている
+
+> **ゴールデンに libm の最後の桁を載せない**（21日目の決定107）。
+> `lib13_test.scm` に `(exp 1)` の値そのものを書くと、**移植先で libm が
+> 変われば落ちる**（root の Makefile は FreeBSD / NetBSD / MinGW も想定している）。
+> 固定してよいのは、正確に表せる値（`(exp 0)` → `1.0`、`(log 0)` → `-inf.0`、
+> `(asin 2)` → `+nan.0`）と、**IEEE 754 が正しい丸めを義務づけている `sqrt`**
+> だけである。残りは
+> `(< (abs (- (* 4 (atan 1)) 3.141592653589793)) 1e-15)` の形で見る。
+> **テストを甘くしたのではなく、処理系の責任と libm の責任を分けた。**
 
 ### 12.3 原典のテスト機構
 
@@ -1856,9 +1977,9 @@ scheme12 に渡しているので、**`NIL` / `TRUE` / `FALSE` という名前�
 | 観点 | 結果 | 測り方 |
 | --- | --- | --- |
 | 大域名 | **差ゼロ**（scheme12 の 156 個すべてあり） | `(globals)` の集合を `comm` |
-| 既存 `.scm` 資産の出力 | **11/12 がバイト単位で一致** | ゴールデン |
+| 既存 `.scm` 資産の出力 | **11/12 がバイト単位で一致**（浮動小数点数を入れた18〜21日目も動いていない） | ゴールデン |
 | 構文・マクロ展開 | 15件一致 | `make compare` |
-| 凍結仕様 §2 | 183項目で固定 | `make selftest` |
+| 凍結仕様 §2 | 265項目で固定 | `make selftest` |
 
 名前の集合を測る手順（主張するなら必ずこれで測ること。
 `dev_memo.md` 決定40）:
@@ -1892,16 +2013,32 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 **3. `test-case6.scm` の出力。** テスト機構を復活させたため別物になった。
 
+**4. 実数に見えるトークン**（18〜19日目）。`1.5` は scheme12 でも
+19日目以前の scheme13 でもシンボルだったが、いまは実数として読まれる。
+**受け入れ基準の12件にも `lib13.scm` にも `tests/*.scm` にも、実数に見える
+トークンは1つも無い**（コメントと文字列を落として全走査した。走査式は
+`micro_scheme8_notes.md` §8）ので、既存の出力は1バイトも動かない。
+
+**5. `+5`**（19日目の決定99）。scheme12 は `+5` を**シンボル**として読む
+（`unbound global: +5`）。scheme13 は**数の 5** にする。
+- 19日目より前の scheme13 は、`+` 始まりを数と判定しておきながら
+  `BigInt("+5")` に渡しており、**Boost の例外で処理系ごと落ちていた**
+  （3日目から16日間）。直すにあたって、リーダの文法（第4.1節）が
+  `+2.5E7` を数と認める以上 `+5` だけシンボルにするのは説明できないので、
+  R5RS どおり数にした
+- 既存資産に `+<数字>` のトークンは1つも無い（実測）。そもそも落ちる入力が
+  ゴールデンに入っているはずがないので、互換性は動かない
+
 ### 13.3 上位互換であること
 
-scheme13 は **211 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **224 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
-差分の 50 個: `lib13.scm` の 35 個 + `error` + `macroexpand-1` +
-`macroexpand` + `test-start` + `test-end` + ポートの 6 個
-（`current-input-port` `current-output-port` `input-port?` `output-port?`
-`peek-char` `char-ready?`）+ 多値と動的拡張の 4 個
-（`values` と内部名 3 つ）。
+差分の 68 個: `lib13.scm` の 28 個 + 数の 22 個（第10.3節の「正確さ」「丸め」
+「超越関数」。18〜21日目）+ `error` + `macroexpand-1` + `macroexpand` +
+`test-start` + `test-end` + ポートの 6 個（`current-input-port`
+`current-output-port` `input-port?` `output-port?` `peek-char` `char-ready?`）
++ 多値と動的拡張の 4 個（`values` と内部名 3 つ）。
 
 port 引数を**省けるようになった**手続きもある（`write-char` `read-char`
 `read-line` `read` `read-expr`）。scheme12 は必ずポートを要求した。
@@ -1909,7 +2046,7 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ### 13.4 証拠の範囲
 
-一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 183 項目**で、
+一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 265 項目**で、
 証明ではない。とくに、**既存資産はどれもエラーを踏まずに走りきる**ので、
 ゴールデンが押さえているのは「正常に走るプログラムの出力」だけである。
 エラー経路の互換性は測っていない（意図的に変えたので、測る意味も薄い）。
@@ -1930,7 +2067,7 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 | `(begin)` `(if #f 10)` | `:UNDEF` | `NIL` |
 | シンボルの大小文字 | CL のリーダが大文字化 | **保存する** |
 | マクロ展開 | 破壊的にメモ化される（同じ箇所は二度展開されない） | 毎回展開する |
-| 有理数 | あり | **入れない**（§2.2 の「整数のみ」を壊す） |
+| 数の塔 | CL の数値塔そのもの（有理数つき、既定は single-float） | **正確な整数と倍精度実数の2階建て**（18日目）。**有理数は入れない**（第14.2節） |
 | `quit` | 自分自身に束縛された**変数**。裸で `quit` と打つ。`(quit)` は落ちる | **手続き**。`(quit)` / `(exit)`（第10.11節） |
 
 原典にあった名前の行方:
@@ -1956,15 +2093,32 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ### 14.1 R5RS で未実装のもの
 
-**8日目に数え上げた 40 件の不足は、13日目にすべて埋まった。**
+**8日目に数え上げた 40 件の不足は13日目にゼロになったが、18日目に実数を
+入れたことで数の側が開き直った**（`dev_memo.md` 決定94）。
 
 | 日 | 埋めたもの | 残り |
 | --- | --- | --- |
 | 8日目 | `lib13.scm`（33個） | 8 |
 | 10日目 | ポート6個（第10.9節） | 2 |
 | 13日目 | `values` `call-with-values` `dynamic-wind` | **0** |
+| 18〜21日目 | 実数（数の22個。第10.3節） | **開き直った。下の表** |
 
-いま無いのは、8日目の数え上げに入っていなかったファイル入出力の便宜手続きである。
+**「該当しないので不足ではない」という閉じ方は、前提が動いた瞬間に嘘になる。**
+13日目にゼロと言えたのは、`numerator` のような有理数の手続きが
+「整数しか無いので該当しない」で閉じていたからである。実数が入ると、
+R5RS はそれらを不正確な有理数に対しても定義しているので、答えられなくなる。
+
+いま無いもの（21日目に `(globals)` から実測）:
+
+| 名前 | なぜ無いか |
+| --- | --- |
+| `numerator` `denominator` `rationalize` | **有理数が無い。** R5RS は正確・不正確とも有理数に対して定義するので、`(numerator 0.5)` を正しく答えられない |
+| `real-part` `imag-part` `magnitude` `angle` `make-rectangular` `make-polar` | **複素数が無い**（第14.2節） |
+| `number->string` / `string->number` の基数引数 | 10進のみ |
+| `call-with-input-file` / `call-with-output-file` | ファイル入出力の便宜手続き（下） |
+| `with-input-from-file` / `with-output-to-file` | 同上 |
+
+ファイル入出力の便宜手続きは、8日目の数え上げに入っていなかったものである。
 
 | 名前 | いま何が要るか |
 | --- | --- |
@@ -1980,7 +2134,8 @@ scheme12 が落としていた**ので戻した、という互換性の話であ
 
 ### 14.2 設計として入れないもの
 
-- **有理数・実数・複素数。** §2.2 の「整数のみ」を壊す
+- **有理数と複素数。** 実数は18日目に入れた（決定80〜95）が、有理数は
+  `/` の意味をもう一度変えることになり、複素数は使う当てがない（決定81）
 - **文字型。** 文字は長さ1の文字列（§2.2）
 - **`syntax-rules`。** `define-macro` のみ
 - **準クオートのネスト。** `` `(a `(b ,,x)) ``
@@ -2277,6 +2432,23 @@ Fatal error: t.scm:1:1: read-char: wrong type of argument
 言い分ける。前者は `expected: a port`、後者は `expected: an open input port`
 （第10.9節）。
 
+数も同じように言い分ける（18〜20日目）。**算術は実数も受けるので `a number`、
+添字や剰余は正確な整数だけを受けるので `an integer`** と言う（決定92・102）。
+
+```
+Fatal error: t.scm:1:1: +: wrong type of argument
+  expected: a number
+  given: "x"
+    (+ 1 "x")
+    ^
+
+Fatal error: t.scm:1:1: vector-ref: wrong type of argument
+  expected: an integer
+  given: 1.0
+    (vector-ref (vector 1 2) 1.0)
+    ^
+```
+
 ### C.2 引数の数が違う
 
 ```
@@ -2315,10 +2487,19 @@ Fatal error: t.scm:1:1: integer->char: argument out of range
   given: 999
     (integer->char 999)
     ^
+
+Fatal error: t.scm:1:1: inexact->exact: argument out of range
+  expected: a real with no fractional part (there are no rationals)
+  given: 2.5
+    (inexact->exact 2.5)
+    ^
 ```
 
 空の入れ物に「0 から -1 まで」と言わせない。値そのものの範囲は
 `argument out of range` で、添字の `index out of range` と見出しを分ける。
+
+`inexact->exact` が範囲の誤りなのは、**有理数が無いので `2.5` に対応する
+正確な数が存在しない**ためである（決定93）。黙って切り捨てない。
 
 ### C.4 構文
 
@@ -2421,7 +2602,7 @@ clang++ -std=c++17 -Wall -Wextra -O2 -Wno-unused-function \
 | ターゲット | 内容 |
 | --- | --- |
 | `all` | ビルド |
-| `selftest` | 凍結仕様との突き合わせ（183項目） |
+| `selftest` | 凍結仕様との突き合わせ（265項目） |
 | `compare` | 構文展開が scheme12 と等価か（15件） |
 | `test` | 既存 `.scm` 資産との互換性回帰（17件）← **受け入れ基準** |
 | `bench` | 呼び出し性能 |
@@ -2454,7 +2635,7 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
 └── scheme13/
     ├── scheme13.cpp            処理系（単一ファイル）
     ├── scheme13                実行ファイル
-    ├── lib13.scm               R5RS の不足 35 個
+    ├── lib13.scm               R5RS の不足 26 個 + exit/quit
     ├── Makefile
     ├── dev_memo.md             設計憲章・凍結仕様・決定ログ
     ├── micro_scheme8_notes.md  原典の読解メモ
@@ -2475,9 +2656,13 @@ scheme13 は scheme12 と**同じ振る舞いを、選び直した設計で**実
 Scheme 処理系である。
 
 - 既存 `.scm` 資産はゴールデンで**バイト単位で一致**する（受け入れ基準）
-- 大域名は scheme12 の 156 個をすべて含み、**55 個多い上位互換**（211 個）
-- **R5RS の不足はゼロ。** 8日目に数え上げた 40 件を、`lib13.scm`（8日目）、
-  ポート（10日目）、多値と `dynamic-wind`（13日目）で埋めた
+- 大域名は scheme12 の 156 個をすべて含み、**68 個多い上位互換**（224 個）
+- 数は**正確な整数と不正確な実数の2階建て**（18〜21日目）。伝播規則は
+  「一つでも不正確なら結果も不正確」で、**整数どうしの `/` は切り捨てのまま**。
+  SICP 1.1.7 のニュートン法が書き写したまま動く
+- **R5RS の不足は、8日目の 40 件については13日目にゼロになった。**
+  ただし実数を入れたことで有理数まわりが開き直っている（第14.1節）。
+  **「該当しないので不足ではない」という閉じ方は、前提が動くと嘘になる**
 - 呼び出し性能は**約 27 倍**。実ワークロード（赤黒木）は 12日目に
   さらに **-23%**（`let` がクロージャを確保しなくなった）
 - エラーは位置・見出し・`expected:`/`given:` の一つの形に揃っている。
