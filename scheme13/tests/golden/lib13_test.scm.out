@@ -8,6 +8,15 @@ TRUE                                               pass
 FALSE                                              pass
 TRUE                                               pass
 FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+1.0                                                pass
+2                                                  pass
+TRUE                                               pass
+FALSE                                              pass
 TRUE                                               pass
 FALSE                                              pass
 TRUE                                               pass
@@ -24,6 +33,9 @@ TRUE                                               pass
 1                                                  pass
 5                                                  pass
 -7                                                 pass
+2.0                                                pass
+1.0                                                pass
+1.5                                                pass
 3                                                  pass
 -3                                                 pass
 -1                                                 pass
@@ -43,18 +55,57 @@ TRUE                                               pass
 1                                                  pass
 243                                                pass
 999999999970000000000299999999999                  pass
+1267650600228229401496703205376                    pass
+0.125                                              pass
+8.0                                                pass
 0                                                  pass
 1                                                  pass
-1                                                  pass
+1.4142135623730951                                 pass
 4                                                  pass
-4                                                  pass
-4                                                  pass
+4.123105625617661                                  pass
+4.898979485566356                                  pass
 5                                                  pass
 99999999999                                        pass
+1.4142135623730951                                 pass
+1.5                                                pass
 5                                                  pass
 -5                                                 pass
 5                                                  pass
 -5                                                 pass
+2.0                                                pass
+-3.0                                               pass
+3.0                                                pass
+-2.0                                               pass
+2.0                                                pass
+4.0                                                pass
+2.5                                                pass
+6.0                                                pass
+0.5                                                pass
+3                                                  pass
+3.5                                                pass
+0                                                  pass
+0.3333333333333333                                 pass
++inf.0                                             pass
+TRUE                                               pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+1.0                                                pass
+0.0                                                pass
+-inf.0                                             pass
++nan.0                                             pass
+0.0                                                pass
+1.0                                                pass
+0.0                                                pass
++nan.0                                             pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
 (a b c)                                            pass
 (b c)                                              pass
 NIL                                                pass
@@ -101,5 +152,5 @@ NIL                                                pass
 (before after before after)                        pass
 (connect talk1 disconnect connect talk2 disconnect)  pass
 
-( total: 102  pass: 102  NG: 0 )
+( total: 153  pass: 153  NG: 0 )
 NIL

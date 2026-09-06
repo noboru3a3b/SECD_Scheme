@@ -47,23 +47,30 @@
 (define abs (lambda (x) (if (< x 0) (- 0 x) x)))
 
 ;; R5RS の max / min は1個以上の可変長。畳み込みは末尾再帰で書く（§4.3）。
-;; **21日目に直す**（決定93）。R5RS は「引数に不正確が1つでもあれば結果も
-;; 不正確」と決めているので、(max 2 1.0) は 2 ではなく 2.0 でなければならない。
+;;
+;; **引数に不正確な数が1つでもあれば、結果も不正確**（R5RS）。(max 2 1.0) は
+;; 2 ではなく 2.0。「大きいほうを選ぶ」ことと「不正確さを伝えること」は別の話
+;; なので、畳み込みの状態を2つ持って最後に1度だけ変換する。
+;; 選ぶ側で exact->inexact を挟むと、選ばれなかった側の不正確さが消える。
 (define max
   (lambda (x . rest)
-    (letrec ((go (lambda (acc ls)
+    (letrec ((go (lambda (acc saw ls)
                    (if (null? ls)
-                       acc
-                       (go (if (> (car ls) acc) (car ls) acc) (cdr ls))))))
-      (go x rest))))
+                       (if saw (exact->inexact acc) acc)
+                       (go (if (> (car ls) acc) (car ls) acc)
+                           (if (inexact? (car ls)) #t saw)
+                           (cdr ls))))))
+      (go x (inexact? x) rest))))
 
 (define min
   (lambda (x . rest)
-    (letrec ((go (lambda (acc ls)
+    (letrec ((go (lambda (acc saw ls)
                    (if (null? ls)
-                       acc
-                       (go (if (< (car ls) acc) (car ls) acc) (cdr ls))))))
-      (go x rest))))
+                       (if saw (exact->inexact acc) acc)
+                       (go (if (< (car ls) acc) (car ls) acc)
+                           (if (inexact? (car ls)) #t saw)
+                           (cdr ls))))))
+      (go x (inexact? x) rest))))
 
 ;; quotient は0方向への切り捨て。`/` が既にそれ（§2.3）。
 (define quotient (lambda (x y) (/ x y)))
@@ -91,33 +98,51 @@
                                (cdr ls)))))))
       (go 1 args))))
 
-;; **21日目に直す**（決定93）。負の指数は 0.125 のような実数を返すようにする。
-;; いまはエラー。実数の底（(expt 2.0 3)）は伝播規則で既に 8.0 になる。
+;; 底も指数も正確で、指数が0以上なら**繰り返し二乗で正確に**求める。
+;; 多倍長へ抜けてもそのまま正しい（(expt 99999999999 3) が丸まらない）。
+;; それ以外は %expt に落とす: (expt 2 -3) は 0.125、(expt 2.0 3) は 8.0。
+;;
+;; **正確な道を先に試すのが肝心。** 先に %expt へ渡すと (expt 2 100) が
+;; 倍精度に丸まってしまう。
 (define expt
   (lambda (b n)
-    (if (< n 0)
-        (error "expt: argument out of range" n)
+    (if (and (exact? b) (exact? n) (>= n 0))
         (letrec ((go (lambda (acc b n)
                        (if (= n 0)
                            acc
                            (go (if (= (modulo n 2) 1) (* acc b) acc)
                                (* b b)
-                               (/ n 2))))))
-          (go 1 b n)))))
+                               (quotient n 2))))))
+          (go 1 b n))
+        (%expt b n))))
 
-;; **21日目に直す**（決定93）。正確な平方数なら正確な整数、そうでなければ
-;; %sqrt で実数を返すようにする。いまは正確な引数に対して**平方根の整数部**を返す。
-;; ニュートン法。初期値を 1 以上に取って単調減少で止める。
+;; R5RS: 正確な引数の平方根が正確に表せるならその数を、そうでなければ
+;; 不正確な数を返す。(sqrt 16) は 4、(sqrt 2) は 1.4142135623730951。
+;;
+;; 平方数かどうかの判定には、**これまで「平方根の整数部」を求めていた
+;; ニュートン法をそのまま使う**（整数の割り算で回るので多倍長でも正確）。
+;; 求めた整数を二乗して元に戻れば、それが正確な答えである。
+;;
+;; **負の引数はエラーのまま。** 実数を入れても答えは虚数のままで、表せない
+;; ものは表せない。+nan.0 を返すと「数でない」と嘘をつくことになる。
+;; 平方根の整数部（内部用）。初期値を 1 以上に取って単調減少で止める。
+(define %isqrt
+  (lambda (x)
+    (if (< x 2)
+        x
+        (letrec ((go (lambda (g)
+                       (let ((next (quotient (+ g (quotient x g)) 2)))
+                         (if (< next g) (go next) g)))))
+          (go (quotient (+ x 1) 2))))))
+
 (define sqrt
   (lambda (x)
     (if (< x 0)
         (error "sqrt: argument out of range" x)
-        (if (< x 2)
-            x
-            (letrec ((go (lambda (g)
-                           (let ((next (/ (+ g (/ x g)) 2)))
-                             (if (< next g) (go next) g)))))
-              (go (/ (+ x 1) 2)))))))
+        (if (exact? x)
+            (let ((r (%isqrt x)))
+              (if (= (* r r) x) r (%sqrt (exact->inexact x))))
+            (%sqrt x)))))
 
 ;;; -------------------------------------------------------------- リスト
 ;;; cdr 方向は末尾再帰で辿る（§4.3 の「cdr 方向を再帰で辿らない」と同じ趣旨。

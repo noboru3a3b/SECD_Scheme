@@ -3061,6 +3061,45 @@ DEFINE_ROUND(prim_truncate, "truncate", std::trunc)
 DEFINE_ROUND(prim_round,    "round",    std::nearbyint)
 #undef DEFINE_ROUND
 
+// --- 超越関数（21日目。決定93 の表の残り）----------------------------------
+//
+// 倍精度でしか意味を持たないので C++ に置く。**引数は数なら何でも受け、
+// 結果は必ず不正確**（R5RS は正確な答えが出る場合でも不正確を返すことを許す）。
+//
+// **定義域の外でも例外にしない。** IEEE 754 に従って `+nan.0` / `-inf.0` を返す
+// （`(/ 1.0 0.0)` を `+inf.0` にしたのと同じ扱い。§2.3）。
+//   (log 0) → -inf.0   (log -1) → +nan.0   (asin 2) → +nan.0
+//
+// `%sqrt` と `%expt` は**内部用**（決定60 の `%`）。`lib13.scm` の
+// `sqrt` / `expt` が「正確な道」を先に試し、外れたときだけここへ落とす。
+#define DEFINE_MATH1(fn, name, op)                                          \
+    static ValuePtr fn(ValuePtr* a, std::size_t n) {                        \
+        need_args(name, n, 1, 1);                                           \
+        return make_flonum(op(to_double(a[0], name)));                      \
+    }
+DEFINE_MATH1(prim_sqrt_raw, "%sqrt", std::sqrt)
+DEFINE_MATH1(prim_exp,      "exp",   std::exp)
+DEFINE_MATH1(prim_log,      "log",   std::log)
+DEFINE_MATH1(prim_sin,      "sin",   std::sin)
+DEFINE_MATH1(prim_cos,      "cos",   std::cos)
+DEFINE_MATH1(prim_tan,      "tan",   std::tan)
+DEFINE_MATH1(prim_asin,     "asin",  std::asin)
+DEFINE_MATH1(prim_acos,     "acos",  std::acos)
+#undef DEFINE_MATH1
+
+static ValuePtr prim_expt_raw(ValuePtr* a, std::size_t n) {
+    need_args("%expt", n, 2, 2);
+    return make_flonum(std::pow(to_double(a[0], "%expt"), to_double(a[1], "%expt")));
+}
+
+// R5RS の atan は1引数と2引数の両方を持つ。2引数のほうは象限を保つ atan2。
+static ValuePtr prim_atan(ValuePtr* a, std::size_t n) {
+    need_args("atan", n, 1, 2);
+    double y = to_double(a[0], "atan");
+    if (n == 1) return make_flonum(std::atan(y));
+    return make_flonum(std::atan2(y, to_double(a[1], "atan")));
+}
+
 // --- ペアとリスト ----------------------------------------------------------
 
 static ValuePtr prim_cons(ValuePtr* a, std::size_t n) {
@@ -4003,6 +4042,10 @@ static void init_globals() {
         {"inexact->exact", prim_inexact_to_exact},
         {"floor", prim_floor}, {"ceiling", prim_ceiling},
         {"truncate", prim_truncate}, {"round", prim_round},
+        {"%sqrt", prim_sqrt_raw}, {"%expt", prim_expt_raw},
+        {"exp", prim_exp}, {"log", prim_log},
+        {"sin", prim_sin}, {"cos", prim_cos}, {"tan", prim_tan},
+        {"asin", prim_asin}, {"acos", prim_acos}, {"atan", prim_atan},
 
         {"cons", prim_cons}, {"car", prim_car}, {"cdr", prim_cdr},
         {"set-car!", prim_set_car}, {"set-cdr!", prim_set_cdr},
@@ -4917,6 +4960,17 @@ static void selftest_eval() {
     check_eq("truncate neg",   eval_to_string("(truncate -2.7)"), "-2.0");
     check_eq("round even 2.5", eval_to_string("(round 2.5)"),    "2.0");
     check_eq("round even 3.5", eval_to_string("(round 3.5)"),    "4.0");
+    // 超越関数（21日目）。**libm の最後の桁に依存する値は固定しない**（決定107）。
+    // %sqrt だけは IEEE 754 が正しい丸めを義務づけているので固定してよい
+    check_eq("%sqrt",     eval_to_string("(%sqrt 2)"),   "1.4142135623730951");
+    check_eq("%expt",     eval_to_string("(%expt 2.0 3)"), "8.0");
+    check_eq("exp zero",  eval_to_string("(exp 0)"),     "1.0");
+    check_eq("log one",   eval_to_string("(log 1)"),     "0.0");
+    // 定義域の外は IEEE 754 に従う。例外にしない（決定105）
+    check_eq("log zero",  eval_to_string("(log 0)"),     "-inf.0");
+    check_eq("log neg",   eval_to_string("(log -1)"),    "+nan.0");
+    check_eq("asin out",  eval_to_string("(asin 2)"),    "+nan.0");
+    check_eq("atan2",     eval_to_string("(= (atan 1 1) (atan 1))"), "TRUE");
 
     check_eq("define",     eval_to_string("(define zz 1)"),       "zz");
     check_eq("set!",       eval_to_string("(define v 1) (set! v 2)"), "2");
