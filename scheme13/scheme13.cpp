@@ -4784,7 +4784,14 @@ static void selftest_errors() {
     check_eq("modulo rejects flonum",
              eval_error_body("(modulo 7.0 2)"),
              "modulo: wrong type of argument\n  expected: an integer\n  given: 7.0");
-    // 0除算は、`/` ではなく**自分の名前**を出す
+    // 0除算。`/` は実数の除算だけ IEEE 754 に従い（(/ 1.0 0.0) は +inf.0）、
+    // **正確な整数どうしはエラーのまま**（§2.3）。26日目に変異法で測ったら、
+    // この1行は selftest / compare / golden / SICP のどれも守っていなかった
+    // （決定133 の表の M39）。エラーで止まるのでゴールデンには書けない。
+    check_eq("exact division by zero",
+             eval_error_body("(/ 1 0)"),
+             "/: division by zero\n  given: 0");
+    // quotient / remainder は、`/` ではなく**自分の名前**を出す
     check_eq("quotient by zero",
              eval_error_body("(quotient 1 0)"),
              "quotient: division by zero\n  given: 0");

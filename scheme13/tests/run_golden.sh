@@ -8,6 +8,11 @@
 # バイト単位で一致しなければならない。これが「既存 .scm を無修正で動かす」
 # の唯一の判定基準。
 #
+# **既存資産は §2 の凍結仕様を測るためのものではない**（26日目に変異法で測った。
+# dev_memo.md §6 の決定133）。既存 .scm は値を計算して表示する筋道しか通らず、
+# 処理系固有の表示形式や実数の書式にはほとんど触れない。その穴を埋めるのが
+# spec_test.scm で、あちらが §2 の各行を1行ずつ写している。
+#
 # 例外が1件ある: test-case6.scm のゴールデンだけは scheme13 の出力で
 # 採り直してある（出力が処理系自身のエラー文言だから。理由は golden/README.md）。
 # そのため **./scheme12_debug を渡すと 11/12 になる**。これは正常。
@@ -41,7 +46,8 @@ trap 'rm -f "$tmp"' EXIT
 # scheme13 が自分で持つテスト。上の FILES と違い、これは scheme12 の出力では
 # なく scheme13 の出力をゴールデンにしてある（scheme12 には lib13.scm が
 # 無いので比べる相手が存在しない）。**./scheme12_debug を渡すと落ちる。**
-OWN_TESTS="scheme13/tests/lib13_test.scm scheme13/tests/port_test.scm \
+OWN_TESTS="scheme13/tests/spec_test.scm scheme13/tests/lib13_test.scm \
+           scheme13/tests/port_test.scm \
            scheme13/tests/exit_test.scm scheme13/tests/macro_print_test.scm"
 
 run_one() {
@@ -122,8 +128,8 @@ check_exit '(exit 3)'  3
 check_exit '(quit)'    0
 rm -f "$probe"
 
-# test_improvements.scm と port_test.scm が置いていく一時ファイル
-rm -f test-eof-temp.txt test-port-temp.txt
+# test_improvements.scm / port_test.scm / spec_test.scm が置いていく一時ファイル
+rm -f test-eof-temp.txt test-port-temp.txt test-spec-temp.txt
 
 echo
 echo "  $pass passed, $fail failed"
