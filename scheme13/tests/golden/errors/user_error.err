@@ -1,0 +1,4 @@
+Fatal error: scheme13/tests/errors/user_error.scm:4:1: something went wrong
+  given: 42
+    (error "something went wrong" 42)
+    ^

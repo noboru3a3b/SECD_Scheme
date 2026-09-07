@@ -1,0 +1,5 @@
+Fatal error: scheme13/tests/errors/arity.scm:3:1: needs-two: wrong number of arguments
+  expected: 2 arguments
+  given: 1
+    (needs-two 1)
+    ^

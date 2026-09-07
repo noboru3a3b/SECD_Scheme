@@ -1,0 +1,5 @@
+Fatal error: scheme13/tests/errors/macro_position.scm:7:1: +: wrong type of argument
+  expected: a number
+  given: "not a number"
+    (twice "not a number")
+    ^

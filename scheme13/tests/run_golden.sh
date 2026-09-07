@@ -41,7 +41,9 @@ FILES="system_lib.scm mlib7.scm hashtable_lib.scm rbtree_lib_improved.scm \
 pass=0
 fail=0
 tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
+so=$(mktemp)          # 標準出力（エラーと REPL の節で使う）
+se=$(mktemp)          # 標準エラー
+trap 'rm -f "$tmp" "$so" "$se"' EXIT
 
 # scheme13 が自分で持つテスト。上の FILES と違い、これは scheme12 の出力では
 # なく scheme13 の出力をゴールデンにしてある（scheme12 には lib13.scm が
@@ -127,6 +129,105 @@ check_exit '(exit #f)' 1
 check_exit '(exit 3)'  3
 check_exit '(quit)'    0
 rm -f "$probe"
+
+# --- エラーの包み（27日目）------------------------------------------------
+# scheme13/tests/errors/*.scm は「エラーを出して止まること」自体が主張なので、
+# 普通のゴールデンには書けない（処理系ごと止まるため1ファイルに1つしか
+# 置けない）。**標準出力・標準エラー・終了状態の3つを別々に**見る。
+#
+# --selftest の selftest_errors() が見ているのは e.what()、つまり**本文だけ**
+# である。`Fatal error: ` の見出し・--load に渡した実際のパス・実行時エラーの
+# キャレット行・終了状態が 1 であること・stderr に出て stdout には出ないこと・
+# **stderr へ書く前に stdout を流す**ことは、27日目までどのテストも見ていなかった。
+# 理由と各ファイルの主張は tests/errors/README.md にある。
+for f in scheme13/tests/errors/*.scm; do
+    base=$(basename "$f" .scm)
+    g="$GOLDEN/errors/$base"
+    set +e
+    timeout 60 "$INTERP" --load "$f" > "$so" 2> "$se"
+    got_exit=$?
+    set -e
+    if [ "$got_exit" = "1" ] &&
+       diff -q "$g.out" "$so" > /dev/null 2>&1 &&
+       diff -q "$g.err" "$se" > /dev/null 2>&1; then
+        printf '  PASS  %-44s エラーの包み\n' "$f"
+        pass=$((pass + 1))
+    else
+        printf '  FAIL  %s (exit: want 1, got %s)\n' "$f" "$got_exit"
+        diff "$g.out" "$so" | head -10 | sed 's/^/        stdout: /'
+        diff "$g.err" "$se" | head -10 | sed 's/^/        stderr: /'
+        fail=$((fail + 1))
+    fi
+
+    # **2つのストリームを混ぜたときの順序**。.out と .err を別々に比べても
+    # 順序は現れない（別ファイルなら、どちらが先に書かれても中身は同じ）。
+    # main が stderr へ書く前に stdout を流していないと、リダイレクトした
+    # ときに「エラーより前の出力」がエラーの**後ろ**へ回る。27日目に変異で
+    # 測って分かった穴で、.mix があるファイルだけこれを見る（決定137）。
+    if [ -f "$g.mix" ]; then
+        set +e
+        timeout 60 "$INTERP" --load "$f" > "$so" 2>&1
+        set -e
+        if diff -q "$g.mix" "$so" > /dev/null 2>&1; then
+            printf '  PASS  %-44s 2つのストリームの順序\n' "$f"
+            pass=$((pass + 1))
+        else
+            printf '  FAIL  %s (stdout と stderr を混ぜたときの順序)\n' "$f"
+            diff "$g.mix" "$so" | head -10 | sed 's/^/        /'
+            fail=$((fail + 1))
+        fi
+    fi
+done
+
+# --- REPL の筋道（27日目）--------------------------------------------------
+# 人が REPL を触る道筋（起動する・打つ・エラーを出す・(help) を読む・抜ける）は、
+# 27日目までどのテストも通っていなかった（dev_memo §9。15日目に (exit) が
+# 無いことへ14日間気づかなかったのと根が同じ）。.in を標準入力に流し込み、
+# 標準出力・標準エラー・終了状態の3つを別々に見る。
+#
+# **プロンプトは tty かどうかを見ずに必ず出る**ので、パイプでも出力が
+# 決定的になる。ここはその性質に寄りかかっている（tests/repl/README.md）。
+for f in scheme13/tests/repl/*.in; do
+    base=$(basename "$f" .in)
+    g="$GOLDEN/repl/$base"
+    set +e
+    timeout 60 "$INTERP" < "$f" > "$so" 2> "$se"
+    got_exit=$?
+    set -e
+    want_exit=$(cat "$g.exit")
+    if [ "$got_exit" = "$want_exit" ] &&
+       diff -q "$g.out" "$so" > /dev/null 2>&1 &&
+       diff -q "$g.err" "$se" > /dev/null 2>&1; then
+        printf '  PASS  %-44s REPL の筋道\n' "$f"
+        pass=$((pass + 1))
+    else
+        printf '  FAIL  %s (exit: want %s, got %s)\n' "$f" "$want_exit" "$got_exit"
+        diff "$g.out" "$so" | head -10 | sed 's/^/        stdout: /'
+        diff "$g.err" "$se" | head -10 | sed 's/^/        stderr: /'
+        fail=$((fail + 1))
+    fi
+done
+
+# --- コマンド行の誤り（27日目）---------------------------------------------
+# 引数の誤りは stderr に出て終了状態 1。ここも通っていなかった。
+check_cli() {
+    want_msg=$1
+    shift
+    set +e
+    "$INTERP" "$@" > /dev/null 2> "$se"
+    got=$?
+    set -e
+    if [ "$got" = "1" ] && head -1 "$se" | grep -q "$want_msg"; then
+        printf '  PASS  scheme13 %s\n' "$*"
+        pass=$((pass + 1))
+    else
+        printf '  FAIL  scheme13 %s (exit %s)\n' "$*" "$got"
+        sed 's/^/        /' "$se" | head -3
+        fail=$((fail + 1))
+    fi
+}
+check_cli 'unknown arg' --bogus
+check_cli 'needs a path' --load
 
 # test_improvements.scm / port_test.scm / spec_test.scm が置いていく一時ファイル
 rm -f test-eof-temp.txt test-port-temp.txt test-spec-temp.txt

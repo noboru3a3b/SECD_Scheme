@@ -1,0 +1,8 @@
+scheme13 debug REPL. Type (help) for commands, (exit) to quit.
+scheme13> 3
+scheme13> scheme13> still alive"still alive"
+scheme13> 
+NIL
+scheme13> 42
+scheme13> 
+Bye!

@@ -29,8 +29,8 @@ all: $(TARGET)
 $(TARGET): $(SOURCE)
 	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $@ $< $(GC_LIB)
 
-# 凍結仕様（dev_memo.md §2.1 / §2.5）との突き合わせ。
-# コンパイラと VM が無い段階でも走る。セクション 3〜5 の回帰はこれ。
+# 凍結仕様（dev_memo.md §2）との突き合わせ。エラー本文と位置もここで見る。
+# ライブラリを読む前に走る C++ 単体の回帰で、セクション 3〜11 に効く。
 selftest: $(TARGET)
 	@$(TARGET) --selftest
 
@@ -41,7 +41,9 @@ compare: $(TARGET)
 	@cd $(ROOT) && $(HERE)/tests/compare_expand.sh $(TARGET)
 
 # 既存 .scm 資産との互換性回帰（受け入れ基準そのもの）。
-# セクション 8〜11 が入るまでは走らない。
+# ゴールデン比較のほかに、起動時ライブラリの探索・終了コード・
+# **エラーの包み**（tests/errors/）・**REPL の筋道**（tests/repl/）・
+# コマンド行の誤り、も見る（27日目の決定135〜137）。
 test: $(TARGET)
 	@cd $(ROOT) && $(HERE)/tests/run_golden.sh $(TARGET)
 
@@ -60,8 +62,8 @@ clean:
 help:
 	@echo "scheme13 targets:"
 	@echo "  all      - ビルド"
-	@echo "  selftest - 凍結仕様との突き合わせ（セクション3〜5の回帰）"
+	@echo "  selftest - 凍結仕様との突き合わせ（C++ 単体の回帰）"
 	@echo "  compare  - 構文展開が scheme12 と等価かを突き合わせる"
-	@echo "  test     - 既存 .scm 資産との互換性回帰（ゴールデン比較）"
+	@echo "  test     - 互換性回帰 + エラーの包み + REPL の筋道（受け入れ基準）"
 	@echo "  bench    - 呼び出し性能のベンチ（scheme12 は約3.4秒）"
 	@echo "  clean    - 生成物を削除"

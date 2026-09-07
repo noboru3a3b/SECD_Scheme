@@ -1,0 +1,5 @@
+Fatal error: scheme13/tests/errors/type_error.scm:6:1: car: wrong type of argument
+  expected: a pair
+  given: 5
+    (car 5)
+    ^

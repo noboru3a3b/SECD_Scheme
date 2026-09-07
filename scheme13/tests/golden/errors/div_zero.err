@@ -1,0 +1,4 @@
+Fatal error: scheme13/tests/errors/div_zero.scm:4:1: /: division by zero
+  given: 0
+    (/ 1 0)
+    ^
