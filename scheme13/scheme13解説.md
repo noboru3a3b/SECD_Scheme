@@ -1,8 +1,8 @@
-# scheme13 解説文書（v1.7）
+# scheme13 解説文書（v1.8）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
-対象は `scheme13/scheme13.cpp`（単一ファイル、5,329 行）と
-`scheme13/lib13.scm`（336 行）。
+対象は `scheme13/scheme13.cpp`（単一ファイル、5,362 行）と
+`scheme13/lib13.scm`（395 行）。
 
 `scheme12_debug`（`scheme12_bignum_boost_debug.cpp`）を、一貫した設計思想の
 もとで書き直したものである。**振る舞いは互換、設計は選び直した。**
@@ -32,6 +32,15 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
 出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
 
+> **v1.8 で追ったもの**: **R5RS のファイル入出力の便宜手続き4つ**を入れた
+> （28日目の決定138〜140）。`call-with-input-file` / `call-with-output-file` /
+> `with-input-from-file` / `with-output-to-file`。標準ポートを差し替える口を
+> C++ に2つ足し（`%set-current-*-port!`）、戻す責任は `dynamic-wind` が持つ。
+> **第10.9節の「差し替えの仕組みは無い」を取り下げ**、第14.1節の
+> 「無いもの」から4つを外した。プリミティブと大域名の個数（第10.1・10.3節）、
+> `port_test.scm` の件数（40 → 50）。
+> **ついでに、追随できていなかった `%` 内部名の個数（9 → 14）も直した。**
+>
 > **v1.7 で追ったもの**: **通っていない筋道を通した**（27日目の決定135〜137）。
 > エラーで止まるときの包み（`tests/errors/`）と、人が REPL を触る筋道
 > （`tests/repl/`）をゴールデンにした。どちらも**標準出力・標準エラー・
@@ -1274,22 +1283,28 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | 層 | 実体 | 個数 |
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
-| プリミティブ | C++ の関数ポインタ | 137 |
-| ライブラリ | Scheme で書かれた定義 | 78（`system_lib.scm` 33 + `lib13.scm` 45） |
+| プリミティブ | C++ の関数ポインタ | 139 |
+| ライブラリ | Scheme で書かれた定義 | 82（`system_lib.scm` 33 + `lib13.scm` 49） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **243 個**の大域名が起動時に定義される。数え方:
+合計 **249 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 243
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 137
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 249
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 139
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
-`%` で始まる9つは**内部名**で、利用者が直接呼ぶものではない（決定60）。
-C++ 側の `%values->list` / `%wind-push` / `%wind-pop` / `%wind-top-after` /
-`%exit`（第10.10節・第8.3節・第10.11節）と `%sqrt` / `%expt`（第10.3節）、
-`lib13.scm` の `%list-tail-checked` / `%isqrt`（第10.6節）である。
+`%` で始まる14個は**内部名**で、利用者が直接呼ぶものではない（決定60）。
+C++ 側が9つ — `%values->list` / `%wind-push` / `%wind-pop` / `%wind-top-after` /
+`%exit`（第10.10節・第8.3節・第10.11節）、`%sqrt` / `%expt`（第10.3節）、
+`%set-current-input-port!` / `%set-current-output-port!`（第10.9節）。
+`lib13.scm` が5つ — `%isqrt` / `%list-tail-checked` / `%map-1` / `%map-n` /
+`%any-null?`（第10.6節）。
+
+```sh
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c '^%'                # 14
+```
 
 `system_lib.scm` は 34 個の `define` と 1 個の `define-macro`（`delay`）を
 持つが、`cdddr` と `memv` はプリミティブが先に定義済みなので読み飛ばされ、
@@ -1306,7 +1321,7 @@ let  let*  letrec  and  or  cond  case  do  quasiquote
 **値としては特殊形式オブジェクト**として大域に束縛されている。
 `(procedure? call/cc)` が `FALSE` なのはこのため。
 
-### 10.3 プリミティブ（137）
+### 10.3 プリミティブ（139）
 
 ```cpp
 using PrimitiveFn = ValuePtr (*)(ValuePtr* argv, std::size_t argc);
@@ -1391,7 +1406,7 @@ R5RS の `map` はリストを何本でも取るが、`system_lib.scm` のもの
 `%map-1` として保持したまま呼ぶ**ので、既存資産の振る舞いは変わらない
 （ゴールデン24件が1バイトも動かないことで確かめてある）。
 
-### 10.6 lib13.scm（45）
+### 10.6 lib13.scm（49）
 
 入れる基準は **「R5RS にあって scheme13 に無いもの」の一本**。
 `sort` / `reduce` / `string-upcase` のような便利な非標準手続きは入れない
@@ -1405,8 +1420,9 @@ R5RS の `map` はリストを何本でも取るが、`system_lib.scm` のもの
 | c…r の4段（16） | `caaaar` `caaadr` `caadar` `caaddr` `cadaar` `cadadr` `caddar` `cadddr` `cdaaar` `cdaadr` `cdadar` `cdaddr` `cddaar` `cddadr` `cdddar` `cddddr` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
 | 多値・動的拡張 | `call-with-values` `dynamic-wind` |
+| ファイル入出力（28日目） | `call-with-input-file` `call-with-output-file` `with-input-from-file` `with-output-to-file` |
 | 終了 | `exit` `quit`（**R5RS 外**。第10.11節） |
-| 内部ヘルパ | `%list-tail-checked` `%isqrt` |
+| 内部ヘルパ | `%isqrt` `%list-tail-checked` `%map-1` `%map-n` `%any-null?` |
 
 **ここに置くのは「`=` や `<` や算術だけで書けるもの」に限る**（20日目の決定104）。
 値の**表現**を見る手続き（`integer?` / `exact?` / `floor` / `exact->inexact` など
@@ -1433,6 +1449,13 @@ R5RS の `map` はリストを何本でも取るが、`system_lib.scm` のもの
 - `floor` / `ceiling` / `truncate` / `round` は整数では恒等。名前を
   受け付けること自体に意味がある（他所のコードがそのまま動く）
 - `string` は文字が長さ1の文字列なので `string-append` そのもの
+- **ファイル入出力の4つ（28日目の決定139）。** `call-with-*-file` は
+  開いて渡して閉じるだけ。`with-*-file` は標準ポートを差し替え、
+  戻す責任を `dynamic-wind` に持たせる（第10.9節）。
+  **入れ子の数を自分で数えない** — 覚えるのは差し替え前の1つだけで、
+  積み重なりは `dynamic-wind` の枠が持つ。
+  **継続で外へ跳んだときポートは閉じない。** R5RS はそこを処理系依存と
+  しており、閉じる約束を黙って足さない（決定139 に却下案の理由がある）
 
 `%list-tail-checked` は `list-tail` と `list-ref` が共有する内部ヘルパで、
 **`%` で始まるのは「利用者が呼ぶものではない」印**である（`dev_memo.md`
@@ -1522,9 +1545,19 @@ scheme13: warning: system_lib.scm not found; the shared library
 は真を返すが実際には閉じない。`fclose(stdout)` を一度でも許すと、
 以後の出力がすべて黙って消えるためである。ファイナライザも登録しない。
 
-いまのところ差し替えの仕組みは無い（`with-output-to-file` は未実装）。
-入れるとすれば `g_stdout_port` を差し替えるだけで済むように、既定の
-出力先はすべてこの値を経由させてある。
+**28日目から差し替えられる**（決定138）。差し替えの口は
+`%set-current-input-port!` / `%set-current-output-port!` の2つだけで、
+どちらも**差し替える前の値を返す**。`with-input-from-file` /
+`with-output-to-file` が `lib13.scm` でこれを使い、**戻す責任は
+`dynamic-wind` が持つ**（第10.10節）。継続で外へ跳べば `after` が戻し、
+再入すれば `before` がもう一度差し替える。
+
+**この2行で済むのは、既定の入出力先をすべて `g_stdin_port` /
+`g_stdout_port` 経由に揃えてあるため**である（10日目の決定48）。
+`stdin` / `stdout` を直に触る場所を増やすと、ここが嘘になる。
+
+差し替わるのは **`port` 引数を省いたとき**の行き先だけである。
+REPL 自身の表示と `--load` の最終値は C++ が直に書くので動かない。
 
 #### 先読みと char-ready?
 
@@ -2224,7 +2257,7 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 ### 13.3 上位互換であること
 
-scheme13 は **243 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **249 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
 差分の 87 個: `lib13.scm` の 45 個（うち c…r の4段16個と `map` の内部名3つは
@@ -2303,17 +2336,18 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 「整数しか無いので該当しない」で閉じていたからである。実数が入ると、
 R5RS はそれらを不正確な有理数に対しても定義しているので、答えられなくなる。
 
-いま無いもの（21日目に `(globals)` から実測）:
+いま無いもの（`(globals)` から実測。21日目に数え、28日目に測り直した）:
 
 | 名前 | なぜ無いか |
 | --- | --- |
 | `numerator` `denominator` `rationalize` | **有理数が無い。** R5RS は正確・不正確とも有理数に対して定義するので、`(numerator 0.5)` を正しく答えられない |
 | `real-part` `imag-part` `magnitude` `angle` `make-rectangular` `make-polar` | **複素数が無い**（第14.2節） |
 | `number->string` / `string->number` の基数引数 | 10進のみ |
-| `call-with-input-file` / `call-with-output-file` | ファイル入出力の便宜手続き（下） |
-| `with-input-from-file` / `with-output-to-file` | 同上 |
+| `for-each` の複数リスト | `map` は23日目に複数リスト対応にしたが、`for-each` は同じ手で足せるまま残っている（決定119） |
 
-ファイル入出力の便宜手続きは、8日目の数え上げに入っていなかったものである。
+**ファイル入出力の便宜手続き4つは、28日目に入れた**（決定138〜140）。
+8日目の数え上げから漏れていただけで、採用基準（第10.6節「R5RS にあって
+scheme13 に無いもの」）の中にあった。`exit` のような基準の例外ではない。
 
 **8日目の数え上げは、ほかにも2つ取りこぼしていた**（23日目に SICP 第2章で
 判明。決定117・119）。どちらも同じ日に埋めた:
@@ -2328,13 +2362,6 @@ R5RS はそれらを不正確な有理数に対しても定義しているので
 `map` は名前として存在していたし、`cadddr` は**名前の一覧を作るとき
 `caar` 系をまとめて1行に書いていた**ので、16個足りないことに気づけなかった。
 `for-each` の複数リストは**まだ無い**（同じ理由で残っている。決定119）。
-
-| 名前 | いま何が要るか |
-| --- | --- |
-| `call-with-input-file` / `call-with-output-file` | **Scheme で3行ずつ書ける。** 開いて渡して閉じるだけ |
-| `with-input-from-file` / `with-output-to-file` | 標準ポートを差し替える口（`g_stdout_port` を入れ替えるプリミティブ）が1つ要る。戻す責任は `dynamic-wind` が持てるようになった |
-
-**どれも「無くて困った」という報告は来ていない。**
 入れるかどうかは `lib13.scm` の基準（第10.6節）ごと利用者と決める話である。
 
 R5RS の外から入れたものが1つだけある。**`exit` / `quit`**（15日目。第10.11節）。
@@ -2886,7 +2913,7 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
         ├── run_golden.sh       ゴールデン比較
         ├── compare_expand.sh   展開の等価性
         ├── lib13_test.scm      lib13.scm の 102 項目テスト
-        ├── port_test.scm       ポートの 40 項目テスト
+        ├── port_test.scm       ポートの 50 項目テスト
         └── golden/             期待される出力
 ```
 

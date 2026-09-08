@@ -515,6 +515,9 @@ static ValuePtr g_false = nullptr;
 static ValuePtr g_eof   = nullptr;
 
 // 標準ポート。(current-input-port) / (current-output-port) が返す値そのもの。
+// **28日目から差し替わる**（決定138）。with-input-from-file /
+// with-output-to-file が %set-current-*-port! でここを付け替え、
+// dynamic-wind が元へ戻す。したがって「起動時の stdin / stdout」とは限らない。
 // display などの既定の出力先もここから取る（10日目の決定48）。
 static ValuePtr g_stdin_port  = nullptr;
 static ValuePtr g_stdout_port = nullptr;
@@ -3716,8 +3719,8 @@ static ValuePtr prim_read_from_stdin(ValuePtr* a, std::size_t n) {
 }
 
 // (current-input-port) / (current-output-port)。R5RS では**手続き**であって
-// 変数ではない。いまはどちらも固定で、with-output-to-file のような
-// 差し替えは無い（10日目の決定46）。
+// 変数ではない。**28日目から差し替えられる**（決定138）ので、返る値は
+// with-input-from-file / with-output-to-file の中では別のポートになる。
 static ValuePtr prim_current_input_port(ValuePtr*, std::size_t n) {
     need_args("current-input-port", n, 0, 0);
     return g_stdin_port;
@@ -3725,6 +3728,34 @@ static ValuePtr prim_current_input_port(ValuePtr*, std::size_t n) {
 static ValuePtr prim_current_output_port(ValuePtr*, std::size_t n) {
     need_args("current-output-port", n, 0, 0);
     return g_stdout_port;
+}
+
+// (%set-current-input-port! port) / (%set-current-output-port! port)
+// **標準ポートを差し替え、差し替える前の値を返す**（28日目の決定138）。
+// lib13.scm の with-input-from-file / with-output-to-file だけが使う。
+//
+// **差し替えがこの2行で済むのは、既定の入出力先をすべて g_stdin_port /
+// g_stdout_port 経由に揃えてあるため**（10日目の決定48。out_port_or_default /
+// in_port_or_default）。stdin / stdout を直に触る場所を増やすと、ここが嘘になる。
+//
+// **戻す責任はここには無い。** 呼ぶ側が dynamic-wind で戻す（決定59）。
+// 継続で外へ跳べば after が、再入すれば before が、同じだけ走る。
+//
+// 閉じたポートや向きの違うポートは port_of が弾く。**古い値を返すのは、
+// 呼ぶ側が「何に戻すか」を覚える必要があるため**で、大域に積み上げない。
+static ValuePtr prim_set_current_input_port(ValuePtr* a, std::size_t n) {
+    need_args("%set-current-input-port!", n, 1, 1);
+    port_of(a[0], "%set-current-input-port!", true);
+    ValuePtr old = g_stdin_port;
+    g_stdin_port = a[0];
+    return old;
+}
+static ValuePtr prim_set_current_output_port(ValuePtr* a, std::size_t n) {
+    need_args("%set-current-output-port!", n, 1, 1);
+    port_of(a[0], "%set-current-output-port!", false);
+    ValuePtr old = g_stdout_port;
+    g_stdout_port = a[0];
+    return old;
 }
 
 // --- 多値と dynamic-wind ---------------------------------------------------
@@ -4129,6 +4160,8 @@ static void init_globals() {
         {"read-line", prim_read_line}, {"read-expr", prim_read_expr},
         {"current-input-port", prim_current_input_port},
         {"current-output-port", prim_current_output_port},
+        {"%set-current-input-port!", prim_set_current_input_port},
+        {"%set-current-output-port!", prim_set_current_output_port},
         {"input-port?", prim_input_portp}, {"output-port?", prim_output_portp},
         {"load", prim_load},
 

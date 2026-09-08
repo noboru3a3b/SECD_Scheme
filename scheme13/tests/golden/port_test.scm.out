@@ -38,6 +38,16 @@ TRUE                                               pass
 TRUE                                               pass
 TRUE                                               pass
 TRUE                                               pass
+wrote                                              pass
+"alpha"                                            pass
+redirected                                         pass
+"beta"                                             pass
+"beta"                                             pass
+saved-out                                          pass
+FALSE                                              pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
 
-( total: 40  pass: 40  NG: 0 )
+( total: 50  pass: 50  NG: 0 )
 NIL

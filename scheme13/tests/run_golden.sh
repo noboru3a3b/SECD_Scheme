@@ -230,7 +230,8 @@ check_cli 'unknown arg' --bogus
 check_cli 'needs a path' --load
 
 # test_improvements.scm / port_test.scm / spec_test.scm が置いていく一時ファイル
-rm -f test-eof-temp.txt test-port-temp.txt test-spec-temp.txt
+rm -f test-eof-temp.txt test-port-temp.txt test-port-temp2.txt test-port-temp3.txt \
+      test-spec-temp.txt
 
 echo
 echo "  $pass passed, $fail failed"

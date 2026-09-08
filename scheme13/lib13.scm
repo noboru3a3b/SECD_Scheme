@@ -27,7 +27,8 @@
 ;;; **`%` で始まる名前は内部用**（決定60）。このファイルが使うためだけの口で、
 ;;; 利用者が呼ぶものではない。ここで定義するのは %isqrt / %list-tail-checked /
 ;;; %map-1 / %map-n / %any-null? の5つ。C++ 側の %sqrt / %expt / %values->list /
-;;; %wind-push / %wind-pop / %wind-top-after / %exit を使っている。
+;;; %wind-push / %wind-pop / %wind-top-after / %exit /
+;;; %set-current-input-port! / %set-current-output-port! を使っている。
 
 ;;; ---------------------------------------------------------------- 数
 ;;; 数は「正確な整数」と「不正確な実数」の2階建て（dev_memo.md §2.2）。
@@ -303,6 +304,64 @@
       (%wind-pop)
       (after)
       result)))
+
+;;; ------------------------------------------ ファイル入出力の便宜手続き
+;;; R5RS 6.6.1 の4つ。**8日目の数え上げから漏れていた**だけで、採用基準
+;;; （決定42「R5RS にあって scheme13 に無いもの」）の中にある。exit のような
+;;; 基準の例外ではない。28日目に利用者の判断で入れた（決定138・139）。
+;;;
+;;; call-with-*-file は**開いて渡して閉じるだけ**。R5RS が定めているのは
+;;; 「proc が普通に返ったらポートを閉じる」ところまでで、継続で外へ跳んだ
+;;; ときに閉じることは要求していない。**ここでもそうする**（跳ばれたら
+;;; 閉じない）。dynamic-wind で閉じる形にもできるが、R5RS より強い約束を
+;;; 黙って足すことになるので採らない。
+;;;
+;;; with-*-file は**標準ポートを差し替える**。差し替えの口は C++ 側の
+;;; %set-current-input-port! / %set-current-output-port! ただ2つで、
+;;; 古い値を返す。**戻す責任は dynamic-wind が持つ**（決定59）。
+;;; 継続で外へ跳べば after が戻し、再入すれば before がもう一度差し替える。
+;;; **入れ子を自分で数えない** — 覚えるのは saved ひとつだけで、
+;;; 積み重なりは dynamic-wind の枠のほうが面倒を見る。
+;;;
+;;; 差し替わるのは display / write / newline / read-char などが
+;;; **port 引数を省いたとき**の行き先である（決定48）。REPL 自身の表示と
+;;; --load の最終値は C++ が直に書くので、ここでは動かない。
+
+(define call-with-input-file
+  (lambda (path proc)
+    (let ((port (open-input-file path)))
+      (let ((result (proc port)))
+        (close-input-port port)
+        result))))
+
+(define call-with-output-file
+  (lambda (path proc)
+    (let ((port (open-output-file path)))
+      (let ((result (proc port)))
+        (close-output-port port)
+        result))))
+
+(define with-input-from-file
+  (lambda (path thunk)
+    (let ((port (open-input-file path))
+          (saved #f))
+      (let ((result (dynamic-wind
+                      (lambda () (set! saved (%set-current-input-port! port)))
+                      thunk
+                      (lambda () (%set-current-input-port! saved)))))
+        (close-input-port port)
+        result))))
+
+(define with-output-to-file
+  (lambda (path thunk)
+    (let ((port (open-output-file path))
+          (saved #f))
+      (let ((result (dynamic-wind
+                      (lambda () (set! saved (%set-current-output-port! port)))
+                      thunk
+                      (lambda () (%set-current-output-port! saved)))))
+        (close-output-port port)
+        result))))
 
 ;;; ---------------------------------------------------------------- 終了
 ;;; (exit) / (exit obj) — 処理系を終える（15日目の決定64）。
