@@ -164,6 +164,52 @@ NIL                                                pass
 2                                                  pass
 (before after before after)                        pass
 (connect talk1 disconnect connect talk2 disconnect)  pass
+(2)                                                pass
+no                                                 pass
+5                                                  pass
+30                                                 pass
+b                                                  pass
+(1 1)                                              pass
+plain                                              pass
+TRUE                                               pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+(TRUE FALSE)                                       pass
+(TRUE FALSE FALSE)                                 pass
+(TRUE FALSE TRUE FALSE)                            pass
+65                                                 pass
+90                                                 pass
+65                                                 pass
+49                                                 pass
+97                                                 pass
+122                                                pass
+97                                                 pass
+49                                                 pass
+(TRUE FALSE)                                       pass
+(TRUE TRUE TRUE TRUE)                              pass
+(TRUE TRUE FALSE)                                  pass
+(TRUE FALSE)                                       pass
+(TRUE TRUE FALSE FALSE)                            pass
+(TRUE FALSE)                                       pass
+TRUE                                               pass
+(TRUE FALSE FALSE)                                 pass
+(FALSE TRUE FALSE)                                 pass
+(TRUE FALSE)                                       pass
+(FALSE TRUE FALSE)                                 pass
+(FALSE FALSE FALSE FALSE)                          pass
+65                                                 pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+(TRUE FALSE)                                       pass
+(TRUE FALSE)                                       pass
+(TRUE TRUE)                                        pass
+(65 98)                                            pass
+(3 2 1)                                            pass
+(4 6)                                              pass
+((1 4 6) (2 5 7))                                  pass
+NIL                                                pass
 
-( total: 166  pass: 166  NG: 0 )
+( total: 212  pass: 212  NG: 0 )
 NIL

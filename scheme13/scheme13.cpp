@@ -1488,9 +1488,15 @@ static ValuePtr expand_or(ValuePtr form) {
 // (cond)                     -> :undef
 // (cond (else body ...) ...) -> (begin body ...)   ※ else 以降の節は捨てる
 // (cond (test) rest ...)     -> (let ((t test)) (if t t <rest>))
+// (cond (test => recv) rest) -> (let ((t test)) (if t (recv t) <rest>))
 // (cond (test body ...) ...) -> (if test (begin body ...) <rest>)
+//
+// `=>` 節は R5RS 4.2.1（29日目の決定141）。本体のない節 (test) が既に
+// 一時変数を要していたので、その機構をそのまま使う。**test は一度しか
+// 評価しない**というのが両者に共通の要件で、`=>` は受け手に渡す先が
+// 変わるだけである。`(else => recv)` は R7RS なので受け付けない。
 static ValuePtr expand_cond(ValuePtr form) {
-    struct Clause { ValuePtr test; ValuePtr body; ValuePtr temp; bool is_else; };
+    struct Clause { ValuePtr test; ValuePtr body; ValuePtr temp; ValuePtr recv; bool is_else; };
     GcVec<Clause> clauses;
 
     ValuePtr cur = cdr(form);
@@ -1502,9 +1508,18 @@ static ValuePtr expand_cond(ValuePtr form) {
         if (!is_pair(cl))
             syntax_error("cond", expected_given("each clause to be (test expression ...)",
                                                 to_string(cl)), form);
-        Clause c{car(cl), cdr(cl), nullptr, is_symbol_named(car(cl), "else")};
+        Clause c{car(cl), cdr(cl), nullptr, nullptr, is_symbol_named(car(cl), "else")};
         // 本体のない節 (test) は値そのものを返すので、一時変数が要る
         if (!c.is_else && is_nil(c.body)) c.temp = make_gensym("cond");
+        // (test => recv) は test の値を recv に渡す。受け手はちょうど1つ
+        if (!c.is_else && is_pair(c.body) && is_symbol_named(car(c.body), "=>")) {
+            ValuePtr tail = cdr(c.body);
+            if (!is_pair(tail) || !is_nil(cdr(tail)))
+                syntax_error("cond", expected_given("exactly one expression after =>",
+                                                    to_string(cl)), form);
+            c.recv = car(tail);
+            c.temp = make_gensym("cond");
+        }
         clauses.push_back(c);
         if (c.is_else) break;              // else 以降は評価されない（scheme12 と同じ）
     }
@@ -1515,9 +1530,12 @@ static ValuePtr expand_cond(ValuePtr form) {
         if (c.is_else) {
             out = make_begin_form(list_to_vector(c.body, "cond"));
         } else if (c.temp) {
+            // 一時変数に受けてから見る。真なら (test) は値そのもの、
+            // (test => recv) は (recv t) を返す
+            ValuePtr then_e = c.recv ? list_from({c.recv, c.temp}) : c.temp;
             out = list_from({make_symbol("let"),
                              list_from({list_from({c.temp, c.test})}),
-                             list_from({make_symbol("if"), c.temp, c.temp, out})});
+                             list_from({make_symbol("if"), c.temp, then_e, out})});
         } else {
             out = list_from({make_symbol("if"), c.test,
                              make_begin_form(list_to_vector(c.body, "cond")), out});
@@ -4606,6 +4624,22 @@ static void selftest_expand() {
              expand_one("(cond (a))"),
              "(let ((cond1 a)) (if cond1 cond1 :undef))");
 
+    // => 節（R5RS 4.2.1。29日目の決定141）。本体のない節 (test) と同じ
+    // 一時変数の機構に載る。**test が let の初期値に一度だけ現れる**ことが
+    // 「test は一度しか評価しない」の中身で、展開形を固定して守る。
+    g_gensym_counter = 0;
+    check_eq("cond arrow",
+             expand_one("(cond (a => f))"),
+             "(let ((cond1 a)) (if cond1 (f cond1) :undef))");
+    g_gensym_counter = 0;
+    check_eq("cond arrow with else",
+             expand_one("(cond (a => f) (else 2))"),
+             "(let ((cond1 a)) (if cond1 (f cond1) 2))");
+    // else 節の => は R7RS。R5RS では (=> car) はただの本体なので、
+    // ここは書き換えずに素通しになるのが正しい
+    check_eq("cond else arrow is not special",
+             expand_one("(cond (else => f))"), "(begin => f)");
+
     g_gensym_counter = 0;
     check_eq("case",
              expand_one("(case k ((1 2) a) (else b))"),
@@ -4831,6 +4865,18 @@ static void selftest_errors() {
     check_eq("remainder by zero",
              eval_error_body("(remainder 1 0)"),
              "remainder: division by zero\n  given: 0");
+
+    // cond の => 節は受け手がちょうど1つ（29日目の決定141）。多くても
+    // 少なくても構文の誤りで、**素通しして実行時の unbound variable に
+    // させない**。`=>` を書いた時点で意図は明らかなので、そこで止める。
+    check_eq("cond arrow needs one receiver",
+             eval_error_body("(cond (1 => car cdr))"),
+             "bad syntax in cond\n"
+             "  expected: exactly one expression after =>\n  given: (1 => car cdr)");
+    check_eq("cond arrow needs a receiver",
+             eval_error_body("(cond (1 =>))"),
+             "bad syntax in cond\n"
+             "  expected: exactly one expression after =>\n  given: (1 =>)");
 
     // クロージャの引数不足は**呼ばれた側の名前**を出す（§8 の1番目）
     check_eq("arity names the callee",

@@ -1,8 +1,8 @@
-# scheme13 解説文書（v1.8）
+# scheme13 解説文書（v1.9）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
-対象は `scheme13/scheme13.cpp`（単一ファイル、5,362 行）と
-`scheme13/lib13.scm`（395 行）。
+対象は `scheme13/scheme13.cpp`（単一ファイル、5,408 行）と
+`scheme13/lib13.scm`（523 行）。
 
 `scheme12_debug`（`scheme12_bignum_boost_debug.cpp`）を、一貫した設計思想の
 もとで書き直したものである。**振る舞いは互換、設計は選び直した。**
@@ -32,6 +32,17 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
 出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
 
+> **v1.9 で追ったもの**: **R5RS の取りこぼしを測り直して23件と構文1つを
+> 入れた**（29日目の決定141〜144）。`cond` の `=>` 節（第6章）、
+> 文字手続き18件と `string-ci` 5件、`for-each` の複数リスト（第10.6節）。
+> **8日目の数え上げが見落とす形の3つ目**が出た — 「該当しないので不足では
+> ない」と閉じた領域である。文字型が無いことを理由に R5RS 6.3.4 を丸ごと
+> 閉じていたが、`char->integer` / `integer->char` は最初から在った。
+> 第14.1節の表から `for-each` を外し、**`eval` 系4件と `transcript` 2件を
+> 「選んで入れていない」として書き足した**（数え上げから漏れたのではない、
+> と記録が言えるようにするため）。大域名 249 → 275、`%` 内部名 14 → 17、
+> `lib13.scm` 49 → 75、`selftest` 277 → 282、`lib13_test.scm` 166 → 212。
+>
 > **v1.8 で追ったもの**: **R5RS のファイル入出力の便宜手続き4つ**を入れた
 > （28日目の決定138〜140）。`call-with-input-file` / `call-with-output-file` /
 > `with-input-from-file` / `with-output-to-file`。標準ポートを差し替える口を
@@ -753,7 +764,7 @@ Fatal error: r3.scm:1:1: unexpected EOF in string literal
 | `(letrec ((v e) ...) body)` | `:undef` で初期化してから `set!` |
 | `(and a b)` | `(if a b FALSE)` |
 | `(or a b)` | `(let ((or1 a)) (if or1 or1 b))` — 一時変数で二重評価を避ける |
-| `(cond ...)` | `if` の入れ子 |
+| `(cond ...)` | `if` の入れ子。`(test)` と `(test => recv)` の節は一時変数を経由する |
 | `(case ...)` | `memv` を使った `cond` |
 | `(do ...)` | `letrec` による名前つきループ |
 | `` `(...) `` | `cons` / `append` の呼び出し列 |
@@ -768,7 +779,7 @@ Fatal error: r3.scm:1:1: unexpected EOF in string literal
 ; => (if a (if b c FALSE) FALSE)
 
 (macroexpand-1 '(or a b))
-; => (let ((or1 a)) (if or1 or1 b))
+; => (let ((or6 a)) (if or6 or6 b))
 
 (macroexpand-1 '(let* ((a 1) (b 2)) a))
 ; => (let ((a 1)) (let* ((b 2)) a))
@@ -776,18 +787,42 @@ Fatal error: r3.scm:1:1: unexpected EOF in string literal
 (macroexpand-1 '(cond ((> x 1) 'big) (else 'small)))
 ; => (if (> x 1) (quote big) (quote small))
 
+(macroexpand-1 '(cond ((assv 1 al) => cdr) (else 'no)))
+; => (let ((cond7 (assv 1 al))) (if cond7 (cdr cond7) (quote no)))
+
 (macroexpand-1 '(do ((i 0 (+ i 1))) ((= i 3) i)))
-; => (letrec ((loop2 (lambda (i) (if (= i 3) i (loop2 (+ i 1)))))) (loop2 0))
+; => (letrec ((loop8 (lambda (i) (if (= i 3) i (loop8 (+ i 1)))))) (loop8 0))
 ```
 
 `let*` が**自分自身へ**1段だけ展開されるのに注目。`macroexpand-1` は
 1段しか進まないので、入れ子は残る。全部見たければ `macroexpand` を使う。
+
+**`or6` / `cond7` / `loop8` の数字は当てにしないこと。** `gensym` の採番は
+起動してからの通し番号で、**起動時ライブラリが使った分だけ進んだ状態から
+始まる**。`system_lib.scm` や `lib13.scm` に `let` を1つ足せば全部ずれる。
+上の値は**この並びを上から順に流したときの実測**であって、1つだけ試せば
+また別の数になる（29日目に採り直した。決定62 の「壊れやすい事実」の実例で、
+文書は `or1` / `loop2` のまま何日も腐っていた）。**見るべきは形であって数
+ではない。** `--selftest` は照合の前に `g_gensym_counter` を 0 に戻している。
 
 **展開結果の先頭ペアには元フォームの位置を貼る**（`with_pos_of`。
 `dev_memo.md` 決定21）。そうしないと `let` の中のエラーが位置を失う。
 
 `or` と `cond` の本体なし節は一時変数を要するので `gensym` を使う。
 `(or a b)` は `a` を2回評価してはいけないため。
+
+**`cond` の `=>` 節（R5RS 4.2.1）も同じ一時変数に載る**（29日目の決定141）。
+`(cond (test => recv) rest)` は `(let ((t test)) (if t (recv t) <rest>))` に
+なる。**要件は「test を一度しか評価しない」こと**で、本体なし節 `(test)` と
+共通である。増えたのは「真のとき何を返すか」の分岐1つだけ。
+
+受け手は**ちょうど1つ**でなければならず、多くても少なくても
+`bad syntax in cond` で止まる。**素通しして実行時の `unbound variable: =>` に
+させない** — `=>` と書いた時点で意図は明らかなので、そこで止めるほうが親切。
+
+`(else => recv)` は**受け付けない**。あれは R7RS で、R5RS では `(=> recv)` は
+ただの本体である。展開は `(begin => recv)` になり、`=>` が未定義であることが
+正しい。`--selftest` の `cond else arrow is not special` がこれを固定している。
 
 ### 5.3 内部 define
 
@@ -1284,26 +1319,26 @@ Fatal error: t.scm:1:8: macroexpand: expansion did not terminate
 | --- | --- | --- |
 | 特殊形式 | コンパイラの生成規則 | 19 |
 | プリミティブ | C++ の関数ポインタ | 139 |
-| ライブラリ | Scheme で書かれた定義 | 82（`system_lib.scm` 33 + `lib13.scm` 49） |
+| ライブラリ | Scheme で書かれた定義 | 108（`system_lib.scm` 33 + `lib13.scm` 75） |
 | 定数 | `T` `TRUE` `true` `FALSE` `false` `NIL` `nil` `:undef` `eof-object` | 9 |
 
-合計 **249 個**の大域名が起動時に定義される。数え方:
+合計 **275 個**の大域名が起動時に定義される。数え方:
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 249
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c ' : '            # 275
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c PRIMITIVE        # 139
 printf '(globals)\n' | ./scheme13/scheme13 | grep -c SPECIAL-FORM     #  19
 ```
 
-`%` で始まる14個は**内部名**で、利用者が直接呼ぶものではない（決定60）。
+`%` で始まる17個は**内部名**で、利用者が直接呼ぶものではない（決定60）。
 C++ 側が9つ — `%values->list` / `%wind-push` / `%wind-pop` / `%wind-top-after` /
 `%exit`（第10.10節・第8.3節・第10.11節）、`%sqrt` / `%expt`（第10.3節）、
 `%set-current-input-port!` / `%set-current-output-port!`（第10.9節）。
-`lib13.scm` が5つ — `%isqrt` / `%list-tail-checked` / `%map-1` / `%map-n` /
-`%any-null?`（第10.6節）。
+`lib13.scm` が8つ — `%isqrt` / `%list-tail-checked` / `%map-1` / `%map-n` /
+`%any-null?` / `%for-each-1` / `%for-each-n` / `%string-downcase`（第10.6節）。
 
 ```sh
-printf '(globals)\n' | ./scheme13/scheme13 | grep -c '^%'                # 14
+printf '(globals)\n' | ./scheme13/scheme13 | grep -c '^%'                # 17
 ```
 
 `system_lib.scm` は 34 個の `define` と 1 個の `define-macro`（`delay`）を
@@ -1406,7 +1441,7 @@ R5RS の `map` はリストを何本でも取るが、`system_lib.scm` のもの
 `%map-1` として保持したまま呼ぶ**ので、既存資産の振る舞いは変わらない
 （ゴールデン24件が1バイトも動かないことで確かめてある）。
 
-### 10.6 lib13.scm（49）
+### 10.6 lib13.scm（75）
 
 入れる基準は **「R5RS にあって scheme13 に無いもの」の一本**。
 `sort` / `reduce` / `string-upcase` のような便利な非標準手続きは入れない
@@ -1419,10 +1454,12 @@ R5RS の `map` はリストを何本でも取るが、`system_lib.scm` のもの
 | リスト | `list-tail` `list-ref` `member` `assoc` |
 | c…r の4段（16） | `caaaar` `caaadr` `caadar` `caaddr` `cadaar` `cadadr` `caddar` `cadddr` `cdaaar` `cdaadr` `cdadar` `cdaddr` `cddaar` `cddadr` `cdddar` `cddddr` |
 | 文字列・ベクタ | `string` `string-copy` `string-fill!` `vector-fill!` |
+| 文字（18。29日目） | `char?` `char=?` `char<?` `char>?` `char<=?` `char>=?` `char-ci=?` `char-ci<?` `char-ci>?` `char-ci<=?` `char-ci>=?` `char-upcase` `char-downcase` `char-alphabetic?` `char-numeric?` `char-whitespace?` `char-upper-case?` `char-lower-case?` |
+| 大小文字を無視した文字列比較（5。29日目） | `string-ci=?` `string-ci<?` `string-ci>?` `string-ci<=?` `string-ci>=?` |
 | 多値・動的拡張 | `call-with-values` `dynamic-wind` |
 | ファイル入出力（28日目） | `call-with-input-file` `call-with-output-file` `with-input-from-file` `with-output-to-file` |
 | 終了 | `exit` `quit`（**R5RS 外**。第10.11節） |
-| 内部ヘルパ | `%isqrt` `%list-tail-checked` `%map-1` `%map-n` `%any-null?` |
+| 内部ヘルパ（8） | `%isqrt` `%list-tail-checked` `%map-1` `%map-n` `%any-null?` `%for-each-1` `%for-each-n` `%string-downcase` |
 
 **ここに置くのは「`=` や `<` や算術だけで書けるもの」に限る**（20日目の決定104）。
 値の**表現**を見る手続き（`integer?` / `exact?` / `floor` / `exact->inexact` など
@@ -1456,6 +1493,26 @@ R5RS の `map` はリストを何本でも取るが、`system_lib.scm` のもの
   積み重なりは `dynamic-wind` の枠が持つ。
   **継続で外へ跳んだときポートは閉じない。** R5RS はそこを処理系依存と
   しており、閉じる約束を黙って足さない（決定139 に却下案の理由がある）
+- **文字手続き18個（29日目の決定143）。文字は長さ1の文字列**（§2.2）なので、
+  R5RS 6.3.4 はその上に載る。**型の規律は `char->integer` 1箇所に預ける** —
+  ここに書く18個は自分で「長さ1か」を見ない。数の節が「正確さを自分で
+  判断しない」のと同じ考えで、規律が2箇所に分かれないほうが嘘をつかない。
+  帰結として `char->integer` が先頭1バイトだけを見る性質もそのまま継ぐ
+  （`(char-upcase "abc")` は `"A"`）。**`char?` だけは例外**で、
+  `char->integer` に預けられない（あれは弾く）ため、
+  **「文字は長さ1の文字列」を書く唯一の場所**になる。
+  大小文字と文字種は **ASCII の範囲だけ**を見る。`string-length` はバイト数を
+  返す（`(string-length "あ")` は 3）ので、この処理系で「文字」と呼べるのは
+  もともと1バイトのものだけである
+- **`string-ci` 5個は文字型と無関係**（決定143）。`string=?` / `string<?` が
+  最初から在るのにこの5つだけ無かった、純粋な取りこぼしである。
+  **`string-downcase` は公開しない** — R6RS 以降の名前で基準の外なので、
+  要る分は `%string-downcase` の内部名にした（決定60）
+- **`for-each` の複数リスト（29日目の決定142）。** `map`（決定119）と
+  まったく同じ形で、**1本のときは `system_lib.scm` の実装をそのまま呼ぶ**
+  （`%for-each-1`）。既存資産は無傷で、増えるのは2本以上の道だけである。
+  **`%map-n` は流用しない** — あれは結果を cons で積むので、`for-each` に
+  使うと捨てるだけのリストを作る
 
 `%list-tail-checked` は `list-tail` と `list-ref` が共有する内部ヘルパで、
 **`%` で始まるのは「利用者が呼ぶものではない」印**である（`dev_memo.md`
@@ -1920,13 +1977,13 @@ NIL
 4つの層がある。**セクションに手を入れたら3つ全部を通すこと。**
 
 ```sh
-make -C scheme13 selftest   # 277 checks — 凍結仕様との突き合わせ（C++ 単体）
+make -C scheme13 selftest   # 282 checks — 凍結仕様との突き合わせ（C++ 単体）
 make -C scheme13 compare    #  15 passed — 構文展開が scheme12 と等価か
 make -C scheme13 test       #  40 passed — 既存 .scm 資産との互換性（受け入れ基準）
 make -C scheme13 bench      # 呼び出し性能
 ```
 
-### 12.1 --selftest（277項目）
+### 12.1 --selftest（282項目）
 
 処理系を C++ 単体で検査する。**起動時ライブラリを読む前に走る**ので、
 ここで見られるのは処理系そのものだけである。
@@ -1954,7 +2011,7 @@ make -C scheme13 bench      # 呼び出し性能
 | ファイル | 例外の理由 |
 | --- | --- |
 | `test-case6.scm` | scheme13 でテスト機構を復活させたため、出力そのものが別物 |
-| `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト（**166項目**）。scheme12 に比べる相手が無い |
+| `scheme13/tests/lib13_test.scm` | scheme13 自身のテスト（**212項目**）。scheme12 に比べる相手が無い |
 | `scheme13/tests/port_test.scm` | 同上（ポート。第10.9節） |
 | `scheme13/tests/exit_test.scm` | 同上（`exit`。第10.11節） |
 | `scheme13/tests/macro_print_test.scm` | 同上（`macro-print`。第11.4節） |
@@ -2205,7 +2262,7 @@ Fatal error: scheme13/tests/errors/type_error.scm:6:1: car: wrong type of argume
 | 大域名 | **差ゼロ**（scheme12 の 156 個すべてあり） | `(globals)` の集合を `comm` |
 | 既存 `.scm` 資産の出力 | **11/12 がバイト単位で一致**（浮動小数点数を入れた18〜21日目も動いていない） | ゴールデン |
 | 構文・マクロ展開 | 15件一致 | `make compare` |
-| 凍結仕様 §2 | 277項目 + `spec_test.scm` で固定 | `make selftest` / `make test` |
+| 凍結仕様 §2 | 282項目 + `spec_test.scm` で固定 | `make selftest` / `make test` |
 
 名前の集合を測る手順（主張するなら必ずこれで測ること。
 `dev_memo.md` 決定40）:
@@ -2257,7 +2314,7 @@ scheme12 の `prim_memq` は生のポインタ比較なので `(memq 3 '(1 2 3))
 
 ### 13.3 上位互換であること
 
-scheme13 は **249 名**、scheme12 は **156 名**。scheme12 のコードは
+scheme13 は **275 名**、scheme12 は **156 名**。scheme12 のコードは
 scheme13 で動くが、**逆は動かない場合がある**。
 
 差分の 87 個: `lib13.scm` の 45 個（うち c…r の4段16個と `map` の内部名3つは
@@ -2274,7 +2331,7 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ### 13.4 証拠の範囲
 
-一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 277 項目**で、
+一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 282 項目**で、
 証明ではない。とくに、**既存資産はどれもエラーを踏まずに走りきる**ので、
 ゴールデンが押さえているのは「正常に走るプログラムの出力」だけである。
 エラー経路の互換性は測っていない（意図的に変えたので、測る意味も薄い）。
@@ -2336,14 +2393,16 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 「整数しか無いので該当しない」で閉じていたからである。実数が入ると、
 R5RS はそれらを不正確な有理数に対しても定義しているので、答えられなくなる。
 
-いま無いもの（`(globals)` から実測。21日目に数え、28日目に測り直した）:
+いま無いもの（`(globals)` と R5RS の名前一覧 200 を `comm` で突き合わせて実測。
+29日目に測り直した。**R5RS の欠落はこの15件だけ**）:
 
 | 名前 | なぜ無いか |
 | --- | --- |
 | `numerator` `denominator` `rationalize` | **有理数が無い。** R5RS は正確・不正確とも有理数に対して定義するので、`(numerator 0.5)` を正しく答えられない |
 | `real-part` `imag-part` `magnitude` `angle` `make-rectangular` `make-polar` | **複素数が無い**（第14.2節） |
 | `number->string` / `string->number` の基数引数 | 10進のみ |
-| `for-each` の複数リスト | `map` は23日目に複数リスト対応にしたが、`for-each` は同じ手で足せるまま残っている（決定119） |
+| `eval` `interaction-environment` `scheme-report-environment` `null-environment` | **選んで入れていない**（29日目の決定144）。R5RS 6.5。入れるには環境を第一級の値にする必要があり、第5章の `Env*`（可変長末尾配列の連結リスト）を値として露出するか、大域環境だけの手抜き版にするかの設計判断が要る。前者は呼び出し規約の中心を動かす |
+| `transcript-on` `transcript-off` | **選んで入れていない**（決定144）。R5RS 6.6.4 でも optional |
 
 **ファイル入出力の便宜手続き4つは、28日目に入れた**（決定138〜140）。
 8日目の数え上げから漏れていただけで、採用基準（第10.6節「R5RS にあって
@@ -2357,12 +2416,33 @@ scheme13 に無いもの」）の中にあった。`exit` のような基準の�
 - **`map` の複数リスト**。R5RS の `map` はリストを何本でも取り、最短で止まる。
   `system_lib.scm` の `map` は1本だけで、2本用の `map-2` が別にあった
 
-**取りこぼしの共通点は「名前はあるが仕様の一部が欠けている」形**である。
-`(globals)` の名前を突き合わせる測り方（第10.1節）はこれを見つけられない。
-`map` は名前として存在していたし、`cadddr` は**名前の一覧を作るとき
-`caar` 系をまとめて1行に書いていた**ので、16個足りないことに気づけなかった。
-`for-each` の複数リストは**まだ無い**（同じ理由で残っている。決定119）。
-入れるかどうかは `lib13.scm` の基準（第10.6節）ごと利用者と決める話である。
+**29日目に、3つ目の取りこぼしの形が出た**（決定141〜144）。
+`(globals)` と R5RS の名前一覧 200 を突き合わせたところ **37 が無く、うち
+28 件はどこにも記録されていなかった**。利用者の判断で `cond` の `=>` 節・
+文字手続き18件・`string-ci` 5件・`for-each` の複数リストを入れ、
+`eval` 系4件と `transcript` 2件は見送った（上の表）。**採用基準は
+変えていない** — どれも第10.6節の「R5RS にあって scheme13 に無いもの」の中で、
+`exit` のような例外ではない。
+
+**名前の数え上げが見落とす形は3つある。**
+
+| 形 | 例 | なぜ見落とすか |
+| --- | --- | --- |
+| ①一覧で1行にまとめた名前 | `cadddr` など16個（23日目） | 名前の一覧を作るとき `caar` 系をまとめて1行に書いていた |
+| ②名前はあるが引数形が足りない | `map`（23日目）/ `for-each`（29日目）/ `number->string` の基数 | 名前としては存在するので、名前の差分に出ない |
+| ③**「該当しないので不足ではない」と閉じた領域** | 文字手続き18個（29日目） | **閉じた言葉が、半分だけ在る実装を覆い隠す** |
+
+③がいちばん見つけにくい。8日目は「文字型が無いので R5RS 6.3.4 は該当しない」
+として丸ごと閉じたが、**`char->integer` / `integer->char` は最初から在った**。
+第14.2節が「入れない」と言っているのは文字*型*であって手続きではなく、
+手続きのほうは「文字は長さ1の文字列」という凍結仕様の上に素直に載る。
+**名前が無いことは測れば分かるが、閉じた理由が正しいかは、閉じた言葉を
+読み直さないと分からない。**
+
+**構文は名前の差分にはまったく出ない。** `cond` の `=>` 節（R5RS 4.2.1）が
+無いことは、`(globals)` をいくら突き合わせても出てこなかった。
+R5RS 4章の形を1つずつ試す別の走査で出た。**名前の差分と、構文の走査は
+別の道具である。** 次に測るときは両方やること。
 
 R5RS の外から入れたものが1つだけある。**`exit` / `quit`**（15日目。第10.11節）。
 基準を緩めたのではなく、**原典 `micro_Scheme8.lisp` にあった `quit` を
@@ -2372,7 +2452,11 @@ scheme12 が落としていた**ので戻した、という互換性の話であ
 
 - **有理数と複素数。** 実数は18日目に入れた（決定80〜95）が、有理数は
   `/` の意味をもう一度変えることになり、複素数は使う当てがない（決定81）
-- **文字型。** 文字は長さ1の文字列（§2.2）
+- **文字型。** 文字は長さ1の文字列（§2.2）。**R5RS 6.3.4 の手続き（`char?`
+  `char=?` `char-upcase` `char-alphabetic?` など18個）は在る** —
+  29日目に入れた（第10.6節。決定143）。**入れないのは型であって手続きでは
+  ない。** 8日目はここを区別せず「該当しない」で丸ごと閉じ、
+  `char->integer` / `integer->char` が最初から在ったことを覆い隠していた
 - **`syntax-rules`。** `define-macro` のみ
 - **準クオートのネスト。** `` `(a `(b ,,x)) ``
 - **角括弧 `[` `]`。** 区切り文字ではない

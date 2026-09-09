@@ -605,4 +605,189 @@ NIL
         (reverse path))))
 (connect talk1 disconnect connect talk2 disconnect)
 
+;;; --- cond の => 節（R5RS 4.2.1。29日目の決定141）---
+;;; **test は一度しか評価しない**というのが要件。それを set! で見る項目を置く。
+
+(cond ((assv 1 '((1 2))) => cdr) (else 'no))
+(2)
+
+(cond ((assv 9 '((1 2))) => cdr) (else 'no))
+no
+
+(cond (#f => car) (5))
+5
+
+(cond ((+ 1 2) => (lambda (x) (* x 10))))
+30
+
+(cond ((assv 2 '((1 a) (2 b))) => cadr) ((assv 1 '((1 a))) => cadr))
+b
+
+(let ((n 0))
+  (cond ((begin (set! n (+ n 1)) n) => (lambda (x) (list x n)))))
+(1 1)
+
+;;; else 節の => は R7RS であって R5RS ではない。ここでは (=> car) という
+;;; ただの本体なので、`=>` が未定義であることが正しい。
+
+(cond (#f 1) (else 'plain))
+plain
+
+;;; --- 文字（R5RS 6.3.4。文字は長さ1の文字列。29日目の決定143）---
+;;; char? だけは §2.2 の定義そのものを見る。ほかは char->integer に預ける。
+
+(char? "a")
+TRUE
+
+(char? "ab")
+FALSE
+
+(char? "")
+FALSE
+
+(char? 97)
+FALSE
+
+(list (char=? "a" "a") (char=? "a" "b"))
+(TRUE FALSE)
+
+(list (char<? "a" "b") (char<? "b" "a") (char<? "a" "a"))
+(TRUE FALSE FALSE)
+
+(list (char>? "b" "a") (char>? "a" "a") (char<=? "a" "a") (char>=? "a" "b"))
+(TRUE FALSE TRUE FALSE)
+
+;;; **大小文字の変換は「数に落として」書く。** このテスト機構は write 表現を
+;;; **大小文字を無視して**照合する（6日目の決定30。原典 CL のリーダが期待値を
+;;; 大文字にしていたため）。したがって `(char-upcase "a")` の期待値に `"A"` と
+;;; 書いても `"a"` が通ってしまい、**変換したことを一つも主張できない**。
+;;; 29日目に変異法でここに穴が開いているのを見つけた（決定144）。
+;;; `char->integer` を通せば照合の対象が数になり、大小文字の畳み込みが効かない。
+
+(char->integer (char-upcase "a"))
+65
+
+(char->integer (char-upcase "z"))
+90
+
+(char->integer (char-upcase "A"))
+65
+
+(char->integer (char-upcase "1"))
+49
+
+(char->integer (char-downcase "A"))
+97
+
+(char->integer (char-downcase "Z"))
+122
+
+(char->integer (char-downcase "a"))
+97
+
+(char->integer (char-downcase "1"))
+49
+
+(list (char-ci=? "A" "a") (char-ci=? "A" "b"))
+(TRUE FALSE)
+
+(list (char-ci<? "A" "b") (char-ci>? "B" "a") (char-ci<=? "a" "A") (char-ci>=? "a" "A"))
+(TRUE TRUE TRUE TRUE)
+
+(list (char-alphabetic? "a") (char-alphabetic? "Z") (char-alphabetic? "1"))
+(TRUE TRUE FALSE)
+
+(list (char-numeric? "7") (char-numeric? "a"))
+(TRUE FALSE)
+
+;;; 境界。"/" は 47、"0" は 48、"9" は 57、":" は 58
+
+(list (char-numeric? "0") (char-numeric? "9") (char-numeric? "/") (char-numeric? ":"))
+(TRUE TRUE FALSE FALSE)
+
+(list (char-whitespace? " ") (char-whitespace? "a"))
+(TRUE FALSE)
+
+(char-whitespace? (integer->char 9))
+TRUE
+
+(list (char-upper-case? "A") (char-upper-case? "a") (char-upper-case? "1"))
+(TRUE FALSE FALSE)
+
+;;; 境界。"@" は 64、"A" は 65、"Z" は 90、"[" は 91
+
+(list (char-upper-case? "@") (char-upper-case? "Z") (char-upper-case? "["))
+(FALSE TRUE FALSE)
+
+(list (char-lower-case? "a") (char-lower-case? "A"))
+(TRUE FALSE)
+
+;;; 境界。"`" は 96、"a" は 97、"z" は 122、"{" は 123
+
+(list (char-lower-case? "`") (char-lower-case? "z") (char-lower-case? "{"))
+(FALSE TRUE FALSE)
+
+;;; char-alphabetic? も同じ境界で
+
+(list (char-alphabetic? "@") (char-alphabetic? "[")
+      (char-alphabetic? "`") (char-alphabetic? "{"))
+(FALSE FALSE FALSE FALSE)
+
+;;; 文字コードの往復。char->integer は最初から在った（8日目の数え上げが
+;;; 「文字型が無いので該当しない」で閉じた側に、半分だけ実装が在った）。
+
+(char->integer (integer->char 65))
+65
+
+;;; --- 大小文字を無視した文字列比較（R5RS 6.3.5。29日目の決定143）---
+;;; 文字型とは無関係で、string=? / string<? は最初から在る。
+
+(string-ci=? "AbC" "aBc")
+TRUE
+
+(string-ci=? "abc" "abd")
+FALSE
+
+(string-ci=? "" "")
+TRUE
+
+(list (string-ci<? "abc" "ABD") (string-ci<? "ABD" "abc"))
+(TRUE FALSE)
+
+(list (string-ci>? "ABD" "abc") (string-ci>? "abc" "ABD"))
+(TRUE FALSE)
+
+(list (string-ci<=? "AB" "ab") (string-ci>=? "AB" "ab"))
+(TRUE TRUE)
+
+;;; 元の文字列を壊さないこと（%string-downcase は新しい文字列を作る）
+
+(let ((s "AbC"))
+  (string-ci=? s "abc")
+  (list (char->integer (string-ref s 0)) (char->integer (string-ref s 1))))
+(65 98)
+
+;;; --- for-each の複数リスト（R5RS 6.4。29日目の決定142）---
+;;; 1本のときは system_lib.scm の実装をそのまま呼ぶ（既存資産は無傷）。
+
+(let ((acc '()))
+  (for-each (lambda (x) (set! acc (cons x acc))) '(1 2 3))
+  acc)
+(3 2 1)
+
+(let ((acc '()))
+  (for-each (lambda (a b) (set! acc (cons (+ a b) acc))) '(1 2) '(3 4))
+  (reverse acc))
+(4 6)
+
+(let ((acc '()))
+  (for-each (lambda (a b c) (set! acc (cons (list a b c) acc))) '(1 2 3) '(4 5) '(6 7 8))
+  (reverse acc))
+((1 4 6) (2 5 7))
+
+(let ((acc '()))
+  (for-each (lambda (a b) (set! acc (cons a acc))) '() '(1 2))
+  acc)
+NIL
+
 (test-end)

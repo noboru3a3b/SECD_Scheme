@@ -250,6 +250,104 @@
         (%map-1 fn ls)
         (%map-n fn (cons ls more)))))
 
+;;; `for-each` も R5RS はリストを何本でも取る。`map` とまったく同じ形で足す
+;;; （29日目の決定142。決定119 が「同じ手で足せる」と書いて保留したもの）。
+;;;
+;;; **1本のときは system_lib.scm の実装をそのまま呼ぶ。** `map` と同じ理由で、
+;;; 既存資産の振る舞いを変えないという保証（dev_memo.md §1.4-1）はここで守る。
+;;; 返り値も 1本のときは system_lib.scm のまま NIL である。R5RS は
+;;; 「未規定」としているので、複数本のときも NIL に揃えておく（§2.4）。
+;;;
+;;; **`%map-n` を流用しない。** あれは結果を cons で積むので、for-each に
+;;; 使うと捨てるだけのリストを作る。ここは積まずに回す。
+
+(define %for-each-1 for-each)
+
+(define %for-each-n
+  (lambda (fn lss)
+    (if (%any-null? lss)
+        '()
+        (begin
+          (apply fn (%map-1 car lss))
+          (%for-each-n fn (%map-1 cdr lss))))))
+
+(set! for-each
+  (lambda (fn ls . more)
+    (if (null? more)
+        (%for-each-1 fn ls)
+        (%for-each-n fn (cons ls more)))))
+
+;;; ---------------------------------------------------------------- 文字
+;;; **文字型は無い。文字は長さ1の文字列**（dev_memo.md §2.2）。
+;;; だから R5RS 6.3.4 の手続きは、その長さ1の文字列の上に載る
+;;; （29日目の決定143。8日目の数え上げは「文字型が無いので該当しない」で
+;;; 閉じていたが、`char->integer` / `integer->char` は最初から在った。
+;;; **半分だけ実装されている状態を、閉じ方の言葉が覆い隠していた**）。
+;;;
+;;; **型の規律は `char->integer` 1箇所に預ける。** ここに書く手続きは
+;;; 自分で「長さ1か」を見ない。数の節が「正確さを自分で判断しない」のと
+;;; 同じ考えで、そうしておくとここが嘘をつかない。帰結として、
+;;; `char->integer` が先頭の1バイトだけを見る性質もそのまま継ぐ
+;;; （`(char-upcase "abc")` は `"A"`）。**`char?` だけは例外**で、
+;;; `char->integer` に預けられない（あれは弾いてしまう）ため、
+;;; §2.2 の定義そのものをここに書く唯一の場所になる。
+;;;
+;;; 大小文字と文字種は **ASCII の範囲だけ**を見る。`string-length` は
+;;; バイト数を返す（`(string-length "あ")` は 3）ので、この処理系で
+;;; 「文字」と呼べるのはもともと1バイトのものだけである。
+
+(define char?
+  (lambda (x) (and (string? x) (= (string-length x) 1))))
+
+;;; 比較は文字コードで。**ちょうど2引数**（既存の `string=?` に揃える）。
+
+(define char=?  (lambda (a b) (=  (char->integer a) (char->integer b))))
+(define char<?  (lambda (a b) (<  (char->integer a) (char->integer b))))
+(define char>?  (lambda (a b) (>  (char->integer a) (char->integer b))))
+(define char<=? (lambda (a b) (<= (char->integer a) (char->integer b))))
+(define char>=? (lambda (a b) (>= (char->integer a) (char->integer b))))
+
+;;; 大小文字の変換。ASCII の 'A'..'Z' は 65..90、'a'..'z' は 97..122。
+
+(define char-upcase
+  (lambda (c)
+    (let ((n (char->integer c)))
+      (if (and (>= n 97) (<= n 122)) (integer->char (- n 32)) (integer->char n)))))
+
+(define char-downcase
+  (lambda (c)
+    (let ((n (char->integer c)))
+      (if (and (>= n 65) (<= n 90)) (integer->char (+ n 32)) (integer->char n)))))
+
+;;; 大小文字を無視した比較は、両方を小文字にしてから比べるだけ。
+
+(define char-ci=?  (lambda (a b) (char=?  (char-downcase a) (char-downcase b))))
+(define char-ci<?  (lambda (a b) (char<?  (char-downcase a) (char-downcase b))))
+(define char-ci>?  (lambda (a b) (char>?  (char-downcase a) (char-downcase b))))
+(define char-ci<=? (lambda (a b) (char<=? (char-downcase a) (char-downcase b))))
+(define char-ci>=? (lambda (a b) (char>=? (char-downcase a) (char-downcase b))))
+
+;;; 文字種。R5RS 6.3.4 は空白として space / tab / newline / page / return を挙げる。
+
+(define char-alphabetic?
+  (lambda (c)
+    (let ((n (char->integer c)))
+      (or (and (>= n 65) (<= n 90)) (and (>= n 97) (<= n 122))))))
+
+(define char-numeric?
+  (lambda (c) (let ((n (char->integer c))) (and (>= n 48) (<= n 57)))))
+
+(define char-whitespace?
+  (lambda (c)
+    (let ((n (char->integer c)))
+      (or (= n 32) (= n 9) (= n 10) (= n 12) (= n 13)))))
+
+(define char-upper-case?
+  (lambda (c) (let ((n (char->integer c))) (and (>= n 65) (<= n 90)))))
+
+(define char-lower-case?
+  (lambda (c) (let ((n (char->integer c))) (and (>= n 97) (<= n 122)))))
+
 ;;; -------------------------------------------------------------- 文字列
 ;;; 文字は長さ1の文字列（§2.2）。だから (string "a" "b") は string-append。
 
@@ -264,6 +362,36 @@
                        (begin (string-set! s i ch) (go (+ i 1)))
                        :undef))))
       (go 0))))
+
+;;; 大小文字を無視した文字列比較（R5RS 6.3.5）。**文字型とは無関係**で、
+;;; `string=?` / `string<?` が最初から在るのにこの5つだけ無かった
+;;; （29日目の決定143）。両方を小文字にしてから既存の比較に渡すだけ。
+;;;
+;;; **`string-downcase` は R5RS に無い**（R6RS 以降の名前）ので、公開の名前に
+;;; はしない。採用基準は「R5RS にあって scheme13 に無いもの」の一本なので、
+;;; ここで要るものは `%` の内部名にする（決定60）。
+
+(define %string-downcase
+  (lambda (s)
+    (let ((n (string-length s)))
+      (let ((out (make-string n)))
+        (letrec ((go (lambda (i)
+                       (if (< i n)
+                           (begin (string-set! out i (char-downcase (string-ref s i)))
+                                  (go (+ i 1)))
+                           out))))
+          (go 0))))))
+
+(define string-ci=?
+  (lambda (a b) (string=?  (%string-downcase a) (%string-downcase b))))
+(define string-ci<?
+  (lambda (a b) (string<?  (%string-downcase a) (%string-downcase b))))
+(define string-ci>?
+  (lambda (a b) (string>?  (%string-downcase a) (%string-downcase b))))
+(define string-ci<=?
+  (lambda (a b) (string<=? (%string-downcase a) (%string-downcase b))))
+(define string-ci>=?
+  (lambda (a b) (string>=? (%string-downcase a) (%string-downcase b))))
 
 ;;; -------------------------------------------------------------- ベクタ
 
