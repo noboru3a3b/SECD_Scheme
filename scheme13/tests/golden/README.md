@@ -6,10 +6,11 @@
 
 **`test-case6.scm` の 1 件だけは scheme13 の出力で採り直してある。**
 
-残る6件（`spec_test.scm` / `lib13_test.scm` / `port_test.scm` / `exit_test.scm` /
-`macro_print_test.scm` / `debug_test.scm`）は**既存資産ではなく scheme13 自身の
-テスト**で、scheme12 には比べる相手が存在しない。こちらも scheme13 の出力を
-ゴールデンにしてある。**`./scheme12_debug` を渡すとこの7件が落ちる。それは正常。**
+残る8件（`spec_test.scm` / `lib13_test.scm` / `port_test.scm` / `exit_test.scm` /
+`macro_print_test.scm` / `debug_test.scm` / `deep_test.scm` / `fdlimit_test.scm`）は
+**既存資産ではなく scheme13 自身のテスト**で、scheme12 には比べる相手が存在しない。
+こちらも scheme13 の出力をゴールデンにしてある。
+**`./scheme12_debug` を渡すとこの9件が落ちる。それは正常。**
 
 | 種類 | 件数 | ゴールデンの出どころ |
 | --- | --- | --- |
@@ -21,6 +22,8 @@
 | `macro_print_test.scm`（`macro-print`。17日目） | 1 | scheme13 |
 | `spec_test.scm`（**凍結仕様 §2 の各行**。26日目） | 1 | scheme13 |
 | `debug_test.scm`（**看板のデバッグ機能**。30日目） | 1 | scheme13 |
+| `deep_test.scm`（**cdr 方向を再帰で辿らないこと**。§4.3-1。31日目） | 1 | scheme13 |
+| `fdlimit_test.scm`（**ポートの後始末**。§1.6-1・§1.6-5。31日目） | 1 | scheme13 |
 
 `exit_test.scm` は**出力だけでなく終了コード（3）が本体**である。
 `.scm` 1本では `exit` を一度しか呼べないので、終了コードの一覧
@@ -138,3 +141,36 @@ comm -23 /tmp/allops.txt /tmp/covered.txt     # 空であること
 値そのものの `equal?` では一致しない。転写の意図は「表示がこうなる」なので、
 **write 表現を大小文字を無視して比べる**ことにした（`test_matches`）。
 これで symbol / `TRUE` / `FALSE` / `NIL` が素直に通る。
+
+
+## `deep_test.scm` と `fdlimit_test.scm` — 設計憲章 §1・§4 の後ろ盾（31日目）
+
+26日目に凍結仕様 §2 を、30日目に §1.5（看板のデバッグ機能）を変異法で測った。
+**31日目は §1.6（GC の規律）と §4.3（再帰の禁止事項）を測った。**
+11個の変異を入れて、既存のスイートが落ちるかを見た結果はこうだった
+（`dev_memo.md` の決定148）:
+
+| 変異 | 30日目までの後ろ盾 |
+| --- | --- |
+| `write_list` を cdr 方向の再帰にする | **なし** |
+| `equal_values` を cdr 方向の再帰にする | あり（`--selftest` の `long equal?`） |
+| `append` を再帰にする | **なし** |
+| `write_list` のバックトラックを外す | あり（`--selftest` の `shared DAG`） |
+| `write_vector` のバックトラックを外す | **なし** |
+| `equal?` の対応関係を外さない（リスト／ベクタ） | **なし** |
+| `make_port` のファイナライザ登録を落とす | **なし** |
+| EMFILE のやり直しを落とす | **なし** |
+
+`deep_test.scm` が上の「深いリスト」側を、`fdlimit_test.scm` が
+「ポートの後始末」側を埋める。バックトラックの3件は値モデルの性質なので
+`--selftest` の `shared DAG` の隣に置いた。
+
+**`deep_test.scm` の 100万という数には根拠がある。** 既定のスタック 8MB のとき、
+`append` を素朴な再帰で書くと25万〜30万の間で溢れる（31日目に実測）。
+3倍強の余裕を取ってあるので、スタックが 24MB ある機械でも溢れる。
+**ここを小さくすると、静かに何も測らなくなる。**
+
+**`fdlimit_test.scm` は単体で走らせても何も測らない。** ディスクリプタが
+余っていれば5000回など何事もなく開ける。`ulimit` を下げるのはシェルにしか
+できないので、`run_golden.sh` の「ポートの後始末」の節が下げて走らせている。
+上限を 64 に下げられない環境では `SKIP` と出る（**`PASS` ではない**）。

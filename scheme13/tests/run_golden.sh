@@ -51,7 +51,7 @@ trap 'rm -f "$tmp" "$so" "$se"' EXIT
 OWN_TESTS="scheme13/tests/spec_test.scm scheme13/tests/lib13_test.scm \
            scheme13/tests/port_test.scm \
            scheme13/tests/exit_test.scm scheme13/tests/macro_print_test.scm \
-           scheme13/tests/debug_test.scm"
+           scheme13/tests/debug_test.scm scheme13/tests/deep_test.scm"
 
 run_one() {
     f=$1
@@ -208,6 +208,39 @@ for f in scheme13/tests/repl/*.in; do
         fail=$((fail + 1))
     fi
 done
+
+# --- ポートの後始末（31日目）-----------------------------------------------
+# 設計憲章 §1.6-1（ポートを作る経路は make_port() ただ一つ。その中で
+# ファイナライザを登録する）と §1.6-5（開く関数は EMFILE/ENFILE で GC して
+# から1回だけやり直す）を守っているか。受け入れ基準 §5.2 にも
+# 「ulimit -n 64 で5000回オープン → 完走」の行がある。
+#
+# **31日目まで、この行を守るテストは一つも無かった**（決定148）。
+# make_port からファイナライザ登録を落としても、やり直しを落としても、
+# --selftest も golden も一つも落ちなかった。
+#
+# 普通のゴールデンに置けないのは、ディスクリプタが余っていれば何も測らない
+# ためである。**ulimit を下げるのはシェルにしかできない**ので、ここに置く。
+fdlim=$( (ulimit -n 64 && ulimit -n) 2>/dev/null )
+if [ "$fdlim" = "64" ]; then
+    f=scheme13/tests/fdlimit_test.scm
+    base=$(basename "$f")
+    set +e
+    ( ulimit -n 64; timeout 60 "$INTERP" --load "$f" ) > "$tmp" 2>&1
+    got_exit=$?
+    set -e
+    want_exit=$(cat "$GOLDEN/$base.exit")
+    if diff -q "$GOLDEN/$base.out" "$tmp" > /dev/null 2>&1 && [ "$got_exit" = "$want_exit" ]; then
+        printf '  PASS  %-44s ポートの後始末\n' "$f"
+        pass=$((pass + 1))
+    else
+        printf '  FAIL  %s (exit: want %s, got %s)\n' "$f" "$want_exit" "$got_exit"
+        diff "$GOLDEN/$base.out" "$tmp" | head -20 | sed 's/^/        /'
+        fail=$((fail + 1))
+    fi
+else
+    printf '  SKIP  ディスクリプタ上限を 64 に下げられない（測っていない）\n'
+fi
 
 # --- コマンド行の誤り（27日目）---------------------------------------------
 # 引数の誤りは stderr に出て終了状態 1。ここも通っていなかった。

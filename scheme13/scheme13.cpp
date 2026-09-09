@@ -4470,6 +4470,15 @@ static void selftest_display() {
     ValuePtr shared = list_from({make_symbol("a")});
     check_eq("shared DAG", to_string(list_from({shared, shared})), "((a) (a))");
 
+    // ベクタ側にも同じバックトラックが要る（§4.3-2）。31日目に変異法で測ったら、
+    // 上の1行はリストの経路しか守っておらず、write_vector の path.erase を
+    // 落としてもどのスイートも落ちなかった。
+    ValuePtr shared_v = make_vector(2, make_int(1LL));
+    ValueVec outer_v;
+    outer_v.push_back(shared_v);
+    outer_v.push_back(shared_v);
+    check_eq("shared DAG (vector)", to_string(make_vector(outer_v)), "#(#(1 1) #(1 1))");
+
     // 実数（18日目の §2.1。決定90）。**丸めて隠さない**
     check_eq("real 1.5",       read_one_to_string("1.5"),    "1.5");
     check_eq("real 1.0",       read_one_to_string("1.0"),    "1.0");
@@ -5243,6 +5252,17 @@ static void selftest_eval() {
     check_eq("long equal?",
              eval_to_string("(define (build n acc) (if (= n 0) acc (build (- n 1) (cons n acc))))"
                             "(equal? (build 200000 '()) (build 200000 '()))"), "TRUE");
+
+    // equal? 側の DAG。**表示の "shared DAG" とは別の実装**なので、
+    // あちらが守っているつもりでいると穴になる（31日目に変異法で測った）。
+    // 同じ節に2度現れるものを、1度目の相手と結び付けたまま忘れると、
+    // 2度目が「対応が違う」と偽になる。§4.3-2 のバックトラックそのもの。
+    check_eq("shared DAG in equal?",
+             eval_to_string("(let ((x (list 1 2)))"
+                            "  (equal? (list x x) (list (list 1 2) (list 1 2))))"), "TRUE");
+    check_eq("shared DAG in equal? (vector)",
+             eval_to_string("(let ((v (vector 1 2)))"
+                            "  (equal? (vector v v) (vector (vector 1 2) (vector 1 2))))"), "TRUE");
 }
 
 // --- REPL ------------------------------------------------------------------
