@@ -6,10 +6,10 @@
 
 **`test-case6.scm` の 1 件だけは scheme13 の出力で採り直してある。**
 
-残る5件（`spec_test.scm` / `lib13_test.scm` / `port_test.scm` / `exit_test.scm` /
-`macro_print_test.scm`）は**既存資産ではなく scheme13 自身のテスト**で、
-scheme12 には比べる相手が存在しない。こちらも scheme13 の出力をゴールデンに
-してある。**`./scheme12_debug` を渡すとこの6件が落ちる。それは正常。**
+残る6件（`spec_test.scm` / `lib13_test.scm` / `port_test.scm` / `exit_test.scm` /
+`macro_print_test.scm` / `debug_test.scm`）は**既存資産ではなく scheme13 自身の
+テスト**で、scheme12 には比べる相手が存在しない。こちらも scheme13 の出力を
+ゴールデンにしてある。**`./scheme12_debug` を渡すとこの7件が落ちる。それは正常。**
 
 | 種類 | 件数 | ゴールデンの出どころ |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ scheme12 には比べる相手が存在しない。こちらも scheme13 の出�
 | `exit_test.scm`（`exit`。15日目） | 1 | scheme13 |
 | `macro_print_test.scm`（`macro-print`。17日目） | 1 | scheme13 |
 | `spec_test.scm`（**凍結仕様 §2 の各行**。26日目） | 1 | scheme13 |
+| `debug_test.scm`（**看板のデバッグ機能**。30日目） | 1 | scheme13 |
 
 `exit_test.scm` は**出力だけでなく終了コード（3）が本体**である。
 `.scm` 1本では `exit` を一度しか呼べないので、終了コードの一覧
@@ -90,6 +91,45 @@ scheme12 はこの機構を「`LDC #t` にする無視扱い」にしたため�
 
 **この 13 という数が動いたら、それは回帰。** ゴールデンが出力全体を
 バイト単位で押さえているので、どの項目が変わったかまで差分に出る。
+
+## `debug_test.scm` — 命令セットの追随を機械に任せる（30日目）
+
+§1.5 は `trace-on` / `trace-off` / `compile` / `disassemble` / `globals` /
+`macros` / `help` を「この処理系の看板」とし、とくに**「逆アセンブル表示は、
+命令セットを変えるたびに追随させること」**と定めている。30日目に測ったところ、
+**7つのうち出力に後ろ盾があったのは `help` と `macro-print` の2つだけ**だった
+（決定145）。`compile` / `disassemble` / `globals` / `macros` は `(help)` の
+文面に名前が載っているだけで、`trace-on` に至っては `test_improvements.scm` が
+**名前を含む文字列を印字していただけ**である。
+
+`debug_test.scm` の第1節は、**21個の命令をすべて出す**ように式が選んである。
+命令セットに手が入れば必ずどこかが動くので、**§1.5 の「追随させること」が
+人の目から機械へ移る**。覆えているかはこう確かめる:
+
+```sh
+# ゴールデンに現れる命令
+grep -oE '^\s*\[[0-9]+\] [A-Z-]+' scheme13/tests/golden/debug_test.scm.out \
+  | awk '{print $2}' | sort -u > /tmp/covered.txt
+# 実装が持つ命令
+sed -n '/enum class Op/,/};/p' scheme13/scheme13.cpp | tr ',' '\n' \
+  | grep -oE '\b[A-Z_]{2,}\b' | sed 's/ARGS_AP/ARGS-AP/' | sort -u > /tmp/allops.txt
+comm -23 /tmp/allops.txt /tmp/covered.txt     # 空であること
+```
+
+**命令を足したらこれが空でなくなる。** そのときは `debug_test.scm` の第1節に、
+その命令を出す式を足すこと。
+
+**`globals` はここに入れない**（26日目の決定136）。大域名が増えるたびに動くので、
+採り直しが「何かを壊した合図」にならない。実際に28・29日目で 243 → 275 と動いた。
+**`macros` は入れてある** — 一覧が2件で、増えるのはマクロを足したときだけだから。
+
+トレースは**意図して最小**にしてある。`(fact 3)` を実況させると608行になり、
+ゴールデンとして「何が変わったか」が読めない。見たいのは「出ること・止まること・
+5つの欄（PC / Instruction / Stack / Environment / Dump）が揃っていること」で、
+それには `(+ 1 2)` の5命令で足りる（決定146）。
+
+**足すときは第4節（トレース）の前に足すこと。** トレースは以降のすべての評価を
+実況するので、後ろに置いたものは巻き込まれる。
 
 ## 期待値の照合の仕方
 
