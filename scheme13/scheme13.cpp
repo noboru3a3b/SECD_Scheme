@@ -4802,6 +4802,38 @@ static void selftest_positions() {
         check_eq("unterminated string", format_error(e),
                  "t.scm:1:1: unexpected EOF in string literal\n    \"abc\n    ^");
     }
+
+    // 受け入れ基準 §5.2「リーダの EOF 無限ループ」の残り3経路（32日目の決定154）。
+    // **読み手が EOF に出会う場所は5つあり、5つとも別々に書いてある。**
+    // 上の2つ（リストの途中・文字列の途中）だけが守られていて、32日目まで
+    // 残りの3つは変異を入れても4スイートが1つも落ちなかった。
+    // 「リーダの EOF はテスト済み」と1行で読むと、ここを取りこぼす。
+    std::uint16_t bad4 = source_intern("t.scm", "(a . b");
+    try {
+        read_all(bad4);
+        check_eq("unterminated dotted tail", "no error", "error");
+    } catch (const SchemeError& e) {
+        check_eq("unterminated dotted tail", format_error(e),
+                 "t.scm:1:1: unexpected EOF in list\n    (a . b\n    ^");
+    }
+
+    std::uint16_t bad5 = source_intern("t.scm", "#(1 2");
+    try {
+        read_all(bad5);
+        check_eq("unterminated vector", "no error", "error");
+    } catch (const SchemeError& e) {
+        check_eq("unterminated vector", format_error(e),
+                 "t.scm:1:1: unexpected EOF in vector literal\n    #(1 2\n    ^");
+    }
+
+    std::uint16_t bad6 = source_intern("t.scm", "'");
+    try {
+        read_all(bad6);
+        check_eq("unterminated quote", "no error", "error");
+    } catch (const SchemeError& e) {
+        check_eq("unterminated quote", format_error(e),
+                 "t.scm:1:1: unexpected EOF after quote abbreviation\n    '\n    ^");
+    }
 }
 
 // 1つの式を評価して write 表現に直す（コンパイラと VM の突き合わせ用）
@@ -5175,6 +5207,17 @@ static void selftest_eval() {
                             "(define n 0)"
                             "(set! n (+ 1 (call/cc (lambda (c) (set! k c) 1))))"
                             "(if (< n 5) (k n) n)"), "3");
+
+    // 受け入れ基準 §5.2「(call/cc k) — 継続を渡せる」（32日目の決定154）。
+    // call/cc の受け手は閉包とは限らない。**継続そのものを渡せる**こと。
+    // (call/cc k) は k を「いまの継続」に適用するので、外側の call/cc は
+    // 継続オブジェクトを値として返し、後ろの 999 には届かない。
+    // 32日目まで、この形はどのスイートも通っていなかった（決定153）。
+    check_eq("call/cc receives a continuation",
+             eval_to_string("(call/cc (lambda (k) (call/cc k)))"), "#<continuation>");
+    check_eq("call/cc with a continuation escapes",
+             eval_to_string("(call/cc (lambda (k) (call/cc k) 999))"), "#<continuation>");
+
     check_eq("equal? deep", eval_to_string("(equal? '(1 (2 #(3 \"x\"))) '(1 (2 #(3 \"x\"))))"),
                             "TRUE");
     check_eq("eq? numbers", eval_to_string("(eq? 100000000000 100000000000)"), "TRUE");
