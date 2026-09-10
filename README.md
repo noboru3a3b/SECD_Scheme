@@ -54,6 +54,8 @@ I had the AI ​​summarize the development process in a document called "NetBS
   
 - I have improved the red-black tree library to the point where it can serve as the foundation for a database. Author: Claude Code Sonnet 5.   
   
+- Rewrote the whole interpreter from scratch as scheme13, this time with a single designer and a design journal carried across sessions. The existing .scm assets run unchanged, and calls became about 31 times faster. Author: Claude Opus 5.  
+  
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
 I have built and tested this on clang++ on Ubuntu-24.04 and FreeBSD-15.0-RELEASE, and g++ on Windows 11.  
@@ -112,7 +114,95 @@ C:\w64devkit
 Download and extract boost_1_91_0.zip and place it directly under the directory c:\ .  
 C:\boost_1_91_0  
   
-## Usage:  
+## The current implementation: scheme13
+
+`scheme13/` holds the current implementation. It is a complete rewrite of
+`scheme12_bignum_boost_debug.cpp` by a single designer, done over 32 working days
+with a design journal (`scheme13/dev_memo.md`) that carries the reason for every
+decision from one session to the next.
+
+What it changes, in short:
+
+- **Same surface language.** The existing `.scm` assets (`system_lib.scm`,
+  `mlib7.scm`, `hashtable_lib.scm`, `rbtree_lib_improved.scm` and the test
+  scripts) run unchanged and produce byte-identical output. That is the
+  acceptance criterion, not a hope.
+- **About 31 times faster** on the call benchmark (1,000,000 calls: 3334 ms to
+  107 ms); the whole golden suite runs 10 times faster.
+- **Errors carry a source position**, with a caret under the offending form.
+- **Double-precision floats**, alongside the arbitrary-precision integers.
+- The debugging features (`compile`, `disassemble`, `trace-on`, `macros`,
+  `help`) are part of the design rather than an afterthought.
+
+`scheme12_bignum_boost_debug.cpp` is **kept on purpose.** It works, it is the
+joint product of many AIs, and it is also the design scheme13 was rewritten away
+from. It is preserved as a record, not maintained; `scheme12_debug解説.md` stays
+with it.
+
+### Build
+
+```
+> make -f Makefile.linux        # or Makefile.freebsd / Makefile.netbsd / Makefile (Windows)
+> ./scheme13/scheme13
+```
+
+`make -f Makefile.linux scheme12` still builds the earlier version.
+
+The regression suite lives with the implementation:
+
+```
+> make -C scheme13 selftest     # 290 checks - frozen spec, error text and source positions
+> make -C scheme13 test         #  43 checks - compatibility with the existing .scm assets,
+                                #              error output, REPL behaviour, exit codes
+> make -C scheme13 bench        # call benchmark
+```
+
+Further reading: `scheme13/scheme13解説.md` (implementation manual) and
+`scheme13/dev_memo.md` (design charter, frozen spec, decision log). Both are in
+Japanese.
+
+## Usage:
+
+```
+> ./scheme13/scheme13
+scheme13 debug REPL. Type (help) for commands, (exit) to quit.
+scheme13> (let ((x 10) (y 20)) (+ x y))
+30
+scheme13> (compile '(let ((x 10) (y 20)) (+ x y)))
+
+=== Compiled Code ===
+[0] LDC 10
+[1] LDC 20
+[2] LDF (x y) [no-alloc]
+      body:
+        [0] LD (0 . 0)
+        [1] LD (0 . 1)
+        [2] LDG +
+        [3] TAPP 2
+        [4] RTN
+[3] APP 2
+[4] STOP
+=====================
+:compiled
+scheme13> (define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+fact
+scheme13> (fact 30)
+265252859812191058636308480000000
+scheme13> (sqrt 2)
+1.4142135623730951
+scheme13> (car '())
+Error: <stdin:6>:1:1: car: wrong type of argument
+  expected: a pair
+  given: NIL
+    (car '())
+    ^
+scheme13> (exit)
+```
+
+## Usage (scheme12, the earlier version):  
+This transcript is kept as it was recorded. At that time the default `make`
+target was scheme12_debug; today it is scheme13, and the earlier version is
+built with `make scheme12`.  
 ```
 PS C:\Users\user\SECD_Scheme> make clean
 rm -f scheme12_debug scheme12_debug.exe libgc-1.dll libgccpp-1.dll

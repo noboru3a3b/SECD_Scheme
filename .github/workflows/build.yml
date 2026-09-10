@@ -15,8 +15,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang libboost-dev libgc-dev
 
-      - name: Build
+      - name: Build scheme13
         run: make -f Makefile.linux
 
       - name: Smoke test
-        run: echo '(+ 1 2 3)' | ./scheme12_debug
+        run: echo '(+ 1 2 3)' | ./scheme13/scheme13
+
+      # dev_memo.md §5.2 の回帰。ライブラリを読む前の C++ 単体の自己テスト。
+      - name: Self test
+        run: make -C scheme13 selftest
+
+      # 受け入れ基準そのもの（dev_memo.md §5.1）。既存 .scm 資産とのバイト一致に
+      # 加えて、エラーの包み・REPL の筋道・終了コード・ポートの後始末まで見る。
+      - name: Acceptance suite
+        run: make -C scheme13 test
+
+      # scheme12 は過去の版として保存してあるだけで手は入れないが、
+      # ビルドが通らなくなったことに気づけるよう、ここで一度だけ建てる。
+      - name: Build scheme12 (earlier version, kept as a record)
+        run: make -f Makefile.linux scheme12

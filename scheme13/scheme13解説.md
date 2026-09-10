@@ -1,4 +1,4 @@
-# scheme13 解説文書（v1.12）
+# scheme13 解説文書（v1.13）
 
 SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解説。
 対象は `scheme13/scheme13.cpp`（単一ファイル、5,471 行）と
@@ -32,7 +32,18 @@ SECD 仮想機械方式の Scheme 処理系 **scheme13** の設計・実装解�
 追随できているかは**機械的に確かめられる**。名前と個数は第10.1節のコマンドで、
 出力例はすべて実機から採ってあるので、そのまま流し直せば合っているか分かる。
 
-> **v1.12 で追ったもの**: **受け入れ基準 §5.2（scheme12 で直した不具合の
+> **v1.13 で追ったもの**: **リポジトリの正面を scheme13 に付け替えた**
+> （33日目の決定157〜159）。ルートの `make` が建てるのは `scheme13/scheme13` に
+> なり、`README.md` も CI も scheme13 を指す。**scheme12 は利用者の意向で
+> 過去の版として保存する** — 消さないと決めたので、README にそう書き、
+> CI が建つことを見る。**CI が受け入れ基準（`--selftest` と `make test`）を
+> 走らせるようになったのもこの日**で、それまでは `(+ 1 2 3)` を1つ流すだけ
+> だった。付録D を書き直し、**置いていかれていた件数も採り直した**
+> （`selftest` 265 → 290、`test` 18 → 43、`lib13_test.scm` 102 → 212、
+> `lib13.scm` の内訳 26 → 75）。
+> **処理系は無変更。**
+>
+> > **v1.12 で追ったもの**: **受け入れ基準 §5.2（scheme12 で直した不具合の
 > 再発防止）の後ろ盾を測った**（32日目の決定153〜156）。8行に14の変異を入れ、
 > **後ろ盾が無かったのは4件** — リーダの EOF の3経路と **`(call/cc k)`** で、
 > 4件とも `--selftest` に足して埋めた（第12.10節）。
@@ -2538,7 +2549,7 @@ port 引数を**省けるようになった**手続きもある（`write-char` `
 
 ### 13.4 証拠の範囲
 
-一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 282 項目**で、
+一致の根拠は**リポジトリにある 12 個の `.scm` 資産と selftest 290 項目**で、
 証明ではない。とくに、**既存資産はどれもエラーを踏まずに走りきる**ので、
 ゴールデンが押さえているのは「正常に走るプログラムの出力」だけである。
 エラー経路の互換性は測っていない（意図的に変えたので、測る意味も薄い）。
@@ -3148,6 +3159,20 @@ make -f scheme13/Makefile
 make -C scheme13
 ```
 
+**ルートの Makefile も scheme13 を建てる**（33日目の決定157〜159）。
+出力先は同じ `scheme13/scheme13` で、違いは**プラットフォームごとの
+コンパイラと include/lib のパスを持っていること**である。
+`scheme13/Makefile` は Linux の設定しか持っていないので、
+FreeBSD / NetBSD / Windows ではこちらを使う。
+
+```sh
+make                      # Windows（w64devkit + 同梱の gc-8.2.12）
+make -f Makefile.linux    # Linux
+make -f Makefile.freebsd  # FreeBSD
+make -f Makefile.netbsd   # NetBSD
+make -f Makefile.linux scheme12   # 以前の版。保存してあるので建てられる
+```
+
 実際に走るコマンド:
 
 ```sh
@@ -3162,9 +3187,9 @@ clang++ -std=c++17 -Wall -Wextra -O2 -Wno-unused-function \
 | ターゲット | 内容 |
 | --- | --- |
 | `all` | ビルド |
-| `selftest` | 凍結仕様との突き合わせ（265項目） |
+| `selftest` | 凍結仕様との突き合わせ（290項目） |
 | `compare` | 構文展開が scheme12 と等価か（15件） |
-| `test` | 既存 `.scm` 資産との互換性回帰（18件）← **受け入れ基準** |
+| `test` | 既存 `.scm` 資産との互換性回帰ほか（43件）← **受け入れ基準** |
 | `bench` | 呼び出し性能 |
 | `clean` | 生成物を削除 |
 | `help` | ターゲット一覧 |
@@ -3188,6 +3213,12 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
 
 ```
 リポジトリのルート/
+├── README.md                   リポジトリの正面。第2節が scheme13（33日目）
+├── Makefile / .linux / .freebsd / .netbsd
+│                               既定で scheme13 を建てる。`scheme12` 目標つき
+├── .github/workflows/build.yml CI。ビルド + selftest + test + scheme12 のビルド
+├── scheme12_bignum_boost_debug.cpp  以前の版。**保存する。触らない**
+├── scheme12_debug解説.md       同上の解説（赤黒木と HT の詳細はここ）
 ├── system_lib.scm              共有ライブラリ（scheme12 と共有。触らない）
 ├── rbtree_lib_improved.scm     赤黒木（共有資産）
 ├── hashtable_lib.scm           ハッシュテーブル（共有資産）
@@ -3195,7 +3226,7 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
 └── scheme13/
     ├── scheme13.cpp            処理系（単一ファイル）
     ├── scheme13                実行ファイル
-    ├── lib13.scm               R5RS の不足 26 個 + exit/quit
+    ├── lib13.scm               R5RS の不足 65 + exit/quit + 内部用 % 8（計 75）
     ├── Makefile
     ├── dev_memo.md             設計憲章・凍結仕様・決定ログ
     ├── micro_scheme8_notes.md  原典の読解メモ
@@ -3203,7 +3234,7 @@ SCHEME13_LIB=/path/to/system_lib.scm SCHEME13_LIB13=/path/to/lib13.scm scheme13/
     └── tests/
         ├── run_golden.sh       ゴールデン比較
         ├── compare_expand.sh   展開の等価性
-        ├── lib13_test.scm      lib13.scm の 102 項目テスト
+        ├── lib13_test.scm      lib13.scm の 212 項目テスト
         ├── port_test.scm       ポートの 50 項目テスト
         └── golden/             期待される出力
 ```
