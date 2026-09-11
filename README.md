@@ -148,10 +148,23 @@ with it.
 
 `make -f Makefile.linux scheme12` still builds the earlier version.
 
+On Windows the binary is `scheme13\scheme13.exe`, and `make` copies the GC
+runtime DLLs next to it, so it runs from either directory:
+
+```
+PS C:\Users\user\SECD_Scheme> .\scheme13\scheme13.exe
+PS C:\Users\user\SECD_Scheme> cd scheme13 ; .\scheme13.exe
+```
+
+The startup libraries (`system_lib.scm` in the root, `scheme13\lib13.scm`) are
+found relative to the executable as well as to the current directory. If one is
+missing the interpreter says so and lists where it looked; `SCHEME13_LIB` and
+`SCHEME13_LIB13` override the search with an explicit path.
+
 The regression suite lives with the implementation:
 
 ```
-> make -C scheme13 selftest     # 290 checks - frozen spec, error text and source positions
+> make -C scheme13 selftest     # 294 checks - frozen spec, error text and source positions
 > make -C scheme13 test         #  43 checks - compatibility with the existing .scm assets,
                                 #              error output, REPL behaviour, exit codes
 > make -C scheme13 bench        # call benchmark

@@ -11,6 +11,7 @@ GC_DLL_DIR = gc-8.2.12/.libs
 GC_RUNTIME_DLLS = libgc-1.dll libgccpp-1.dll
 
 TARGET = scheme13/scheme13
+TARGET_DIR = scheme13
 SOURCE = scheme13/scheme13.cpp
 
 # The earlier implementation. This is the design scheme13 was rewritten away
@@ -22,9 +23,16 @@ LEGACY_SOURCE = scheme12_bignum_boost_debug.cpp
 
 all: $(TARGET)
 
+# The GC runtime DLLs go NEXT TO THE EXECUTABLE. On Windows the loader looks
+# in the .exe's own directory first; the current directory is consulted much
+# later (and not at all under some launch modes). A copy in the repository root
+# only works while the shell happens to sit there, so `cd scheme13` followed by
+# `.\scheme13.exe` used to die before main() with STATUS_DLL_NOT_FOUND --
+# no message, the prompt just comes back. Keep the root copy as well: that is
+# where scheme12_debug is built.
 $(TARGET): $(SOURCE)
 	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $@ $< $(GC_LIB)
-	@for dll in $(GC_RUNTIME_DLLS); do cp -f $(GC_DLL_DIR)/$$dll .; done
+	@for dll in $(GC_RUNTIME_DLLS); do cp -f $(GC_DLL_DIR)/$$dll $(TARGET_DIR)/; cp -f $(GC_DLL_DIR)/$$dll .; done
 
 scheme12: $(LEGACY_TARGET)
 
@@ -33,7 +41,7 @@ $(LEGACY_TARGET): $(LEGACY_SOURCE)
 	@for dll in $(GC_RUNTIME_DLLS); do cp -f $(GC_DLL_DIR)/$$dll .; done
 
 clean:
-	rm -f $(TARGET) $(TARGET).exe $(LEGACY_TARGET) $(LEGACY_TARGET).exe libgc-1.dll libgccpp-1.dll
+	rm -f $(TARGET) $(TARGET).exe $(LEGACY_TARGET) $(LEGACY_TARGET).exe $(GC_RUNTIME_DLLS) $(addprefix $(TARGET_DIR)/,$(GC_RUNTIME_DLLS))
 
 test: $(TARGET)
 	@echo "Testing basic functionality..."

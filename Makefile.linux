@@ -33,7 +33,9 @@ $(LEGACY_TARGET): $(LEGACY_SOURCE)
 	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $@ $< $(GC_LIB)
 
 clean:
-	rm -f $(TARGET) $(TARGET).exe $(LEGACY_TARGET) $(LEGACY_TARGET).exe libgc-1.dll libgccpp-1.dll
+	rm -f $(TARGET) $(TARGET).exe $(LEGACY_TARGET) $(LEGACY_TARGET).exe \
+	      libgc-1.dll libgccpp-1.dll \
+	      scheme13/libgc-1.dll scheme13/libgccpp-1.dll
 
 test: $(TARGET)
 	@echo "Testing basic functionality..."

@@ -10,7 +10,10 @@
 
 # scheme13 のビルド成果物
 /scheme13/scheme13
+/scheme13/scheme13.exe
 /scheme13/.bench.scm
+# MinGW 版は GC のランタイム DLL を実行ファイルの隣にも置く（決定162）
+/scheme13/*.dll
 
 # クラッシュダンプ
 /core.*

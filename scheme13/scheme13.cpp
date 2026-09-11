@@ -4321,6 +4321,12 @@ static ValuePtr load_library_dedup(const std::string& path) {
 //   3. 実行ファイルの1つ上（scheme13/scheme13 → リポジトリのルート）
 //   4. カレントディレクトリ
 //   5. カレントディレクトリの1つ上
+//
+// **区切りは `/` と `\` の両方を見る。** MinGW 版を cmd / PowerShell から
+// `.\scheme13\scheme13.exe` と起動すると argv[0] は円記号区切りで渡るので、
+// `/` だけを探すと 2. と 3. が丸ごと落ちる。リポジトリのルートから起動した
+// とき、cwd に在る system_lib.scm だけが見つかり、scheme13/ に在る
+// lib13.scm を黙って失う——という壊れ方をしていた（35日目の決定161）。
 static RootVec<std::string> library_candidates(const char* argv0, const char* env_var,
                                                const char* file) {
     RootVec<std::string> candidates;
@@ -4328,7 +4334,7 @@ static RootVec<std::string> library_candidates(const char* argv0, const char* en
         candidates.push_back(env);
     if (argv0 && *argv0) {
         std::string exe(argv0);
-        std::size_t slash = exe.find_last_of('/');
+        std::size_t slash = exe.find_last_of("/\\");
         if (slash != std::string::npos) {
             std::string dir = exe.substr(0, slash + 1);
             candidates.push_back(dir + file);
@@ -4756,6 +4762,40 @@ static void selftest_test_matching() {
     // 凍結仕様のどれかが動いている
     check_eq("test: closure differs",  match("(lambda (x) x)", "(CLOSURE (LD (0 . 0) RTN) NIL)"), "NG");
     check_eq("test: (begin) differs",  match("(begin)", ":UNDEF"), "NG");
+}
+
+// 起動時ライブラリの探索候補（セクション12 の library_candidates）。
+//
+// **壊れるのは Windows だけなのに、CI は Linux でしか回らない**場所なので、
+// 実際にファイルを読みに行かず、組み立てた候補の並びを文字列として押さえる。
+// これなら MinGW 版の argv[0]（円記号区切り）も Linux 上で試せる。
+static void selftest_library_search() {
+    auto joined = [](const char* argv0) {
+        RootVec<std::string> c =
+            library_candidates(argv0, "SCHEME13_SELFTEST_UNSET", "lib13.scm");
+        std::string out;
+        for (const std::string& path : c) {
+            if (!out.empty()) out += " | ";
+            out += path;
+        }
+        return out;
+    };
+    check_eq("lib search: posix",
+             joined("./scheme13/scheme13"),
+             "./scheme13/lib13.scm | ./scheme13/../lib13.scm | lib13.scm | ../lib13.scm");
+    // MinGW 版を cmd / PowerShell から起動した形（35日目の決定161）。
+    // ここが cwd の2件だけに縮むのが、直した壊れ方そのもの
+    check_eq("lib search: windows",
+             joined(".\\scheme13\\scheme13.exe"),
+             ".\\scheme13\\lib13.scm | .\\scheme13\\../lib13.scm | lib13.scm | ../lib13.scm");
+    check_eq("lib search: mixed separators",
+             joined("C:/work/scheme13\\scheme13.exe"),
+             "C:/work/scheme13\\lib13.scm | C:/work/scheme13\\../lib13.scm | "
+             "lib13.scm | ../lib13.scm");
+    // 区切りが無ければ実行ファイルの位置は分からない。cwd の2件だけになる
+    check_eq("lib search: bare name",
+             joined("scheme13"),
+             "lib13.scm | ../lib13.scm");
 }
 
 static void selftest_positions() {
@@ -5427,6 +5467,7 @@ int main(int argc, char** argv) {
             selftest_macro_positions();
             selftest_macroexpand();
             selftest_test_matching();
+            selftest_library_search();
             std::printf("\n  %d checks, %d failed\n", g_checks, g_failures);
             return g_failures == 0 ? 0 : 1;
         }
