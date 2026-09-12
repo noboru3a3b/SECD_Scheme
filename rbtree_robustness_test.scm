@@ -22,6 +22,15 @@
 ;;;   - rb-search returning false for "not found" is indistinguishable from
 ;;;     a stored value of false (no separate membership predicate existed)
 ;;;
+;;; A later audit (2026-09-12) against a revised rbtree4.cal found the two
+;;; libraries' cores already equivalent, and adopted one more item from it:
+;;; RB-01, "an empty link is anything that is not a node". rb-null? is now
+;;; (not (vector? node)) instead of a string comparison against the RB-NIL
+;;; global. Everything else rbtree4.cal has gained since - handles carrying
+;;; a comparator and a misuse-detecting mode, path-copying persistent
+;;; updates, a size field for rank/select - is a change of representation
+;;; and API, deliberately not followed here.
+;;;
 ;;; This file verifies each fix.
 
 (load "rbtree_lib_improved.scm")

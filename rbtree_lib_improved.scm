@@ -7,12 +7,17 @@
 (define RED 1)
 (define RB-NIL ":nil")
 
-;;; Utility: nil check
+;;; Utility: nil check. A node is always a vector, so "not a vector" is
+;;; exactly "empty link" - this is rbtree4.cal's RB-01 decision, reached
+;;; there because an empty link compared by identity against a rebindable
+;;; global is fragile. The same reasoning applies here (RB-NIL is an
+;;; ordinary global a caller can rebind), and the test is also the cheapest
+;;; one available: it replaces a string equal? on every link inspection,
+;;; the hottest operation in the library. Non-vector junk now reads as an
+;;; empty link instead of failing in vector-ref, matching rbtree4.cal.
 (define rb-null?
   (lambda (node)
-    (or (null? node)
-        (eq? node RB-NIL)
-        (equal? node RB-NIL))))
+    (not (vector? node))))
 
 ;;; Node creation
 (define make-rb-node
