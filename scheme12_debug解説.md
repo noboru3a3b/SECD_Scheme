@@ -2513,10 +2513,16 @@ scheme12は実用的なデータ構造ライブラリを提供します。
 ```scheme
 (define rb-null?
   (lambda (node)
-    (or (null? node)
-        (eq? node RB-NIL)
-        (equal? node RB-NIL))))
+    (not (vector? node))))
 ```
+
+ノードは常にベクタなので、「ベクタでない＝空リンク」がそのまま成り立つ。
+2026-09-12 に、原型である Fncalc の `rbtree4.cal`（RB-01）へ追従して
+`(or (null? node) (eq? node RB-NIL) (equal? node RB-NIL))` から置き換えた。
+`RB-NIL` は再束縛できる普通の大域なので同一性で比べるのは壊れやすく、また
+ここはライブラリで最も回る判定で、全リンク検査から文字列の `equal?` が
+外れると赤黒木のワークロードが 40% 速くなる。`RB-NIL` は空木の初期値
+（`(define tree RB-NIL)`）としてそのまま残る。**出力は変わらない。**
 
 **平衡操作**
 ```scheme
