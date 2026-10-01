@@ -1,0 +1,6 @@
+scheme14 debug REPL. Type (help) for commands, (exit) to quit.
+scheme14> 3
+scheme14> (a b c)
+scheme14> "a string"
+scheme14> 
+Bye!

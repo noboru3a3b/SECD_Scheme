@@ -1,0 +1,4 @@
+(display "before exit")
+(newline)
+(exit 3)
+(display "never runs")

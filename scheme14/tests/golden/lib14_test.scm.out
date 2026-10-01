@@ -1,0 +1,215 @@
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+1.0                                                pass
+2                                                  pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+5                                                  pass
+5                                                  pass
+0                                                  pass
+99999999999999999999                               pass
+7                                                  pass
+1                                                  pass
+5                                                  pass
+-7                                                 pass
+2.0                                                pass
+1.0                                                pass
+1.5                                                pass
+3                                                  pass
+-3                                                 pass
+-1                                                 pass
+1                                                  pass
+1                                                  pass
+-1                                                 pass
+6                                                  pass
+2                                                  pass
+6                                                  pass
+0                                                  pass
+7                                                  pass
+12                                                 pass
+1                                                  pass
+0                                                  pass
+1024                                               pass
+1                                                  pass
+1                                                  pass
+243                                                pass
+999999999970000000000299999999999                  pass
+1267650600228229401496703205376                    pass
+0.125                                              pass
+8.0                                                pass
+0                                                  pass
+1                                                  pass
+1.4142135623730951                                 pass
+4                                                  pass
+4.123105625617661                                  pass
+4.898979485566356                                  pass
+5                                                  pass
+99999999999                                        pass
+1.4142135623730951                                 pass
+1.5                                                pass
+5                                                  pass
+-5                                                 pass
+5                                                  pass
+-5                                                 pass
+2.0                                                pass
+-3.0                                               pass
+3.0                                                pass
+-2.0                                               pass
+2.0                                                pass
+4.0                                                pass
+2.5                                                pass
+6.0                                                pass
+0.5                                                pass
+3                                                  pass
+3.5                                                pass
+0                                                  pass
+0.3333333333333333                                 pass
++inf.0                                             pass
+TRUE                                               pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+1.0                                                pass
+0.0                                                pass
+-inf.0                                             pass
++nan.0                                             pass
+0.0                                                pass
+1.0                                                pass
+0.0                                                pass
++nan.0                                             pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+TRUE                                               pass
+(a b c)                                            pass
+(b c)                                              pass
+NIL                                                pass
+a                                                  pass
+c                                                  pass
+4                                                  pass
+(5)                                                pass
+1                                                  pass
+NIL                                                pass
+2                                                  pass
+28                                                 pass
+(1 4 9)                                            pass
+(11 22 33)                                         pass
+(15 48)                                            pass
+((a 1) (b 2))                                      pass
+(11 22)                                            pass
+NIL                                                pass
+(4 6)                                              pass
+(2 3)                                              pass
+FALSE                                              pass
+((a) (b))                                          pass
+(2 b)                                              pass
+FALSE                                              pass
+((k) 1)                                            pass
+"abc"                                              pass
+""                                                 pass
+"hello"                                            pass
+:undef                                             pass
+"zzz"                                              pass
+:undef                                             pass
+#(7 7 7)                                           pass
+5                                                  pass
+(1 2)                                              pass
+(7)                                                pass
+NIL                                                pass
+5                                                  pass
+(1 2 3)                                            pass
+(7)                                                pass
+NIL                                                pass
+-1                                                 pass
+wind-log                                           pass
+wind-note                                          pass
+wind-reset                                         pass
+42                                                 pass
+(in out)                                           pass
+NIL                                                pass
+escaped                                            pass
+(in out)                                           pass
+NIL                                                pass
+deep                                               pass
+(a-in b-in b-out a-out)                            pass
+NIL                                                pass
+from-before                                        pass
+(b)                                                pass
+NIL                                                pass
+2                                                  pass
+(before after before after)                        pass
+(connect talk1 disconnect connect talk2 disconnect)  pass
+(2)                                                pass
+no                                                 pass
+5                                                  pass
+30                                                 pass
+b                                                  pass
+(1 1)                                              pass
+plain                                              pass
+TRUE                                               pass
+FALSE                                              pass
+FALSE                                              pass
+FALSE                                              pass
+(TRUE FALSE)                                       pass
+(TRUE FALSE FALSE)                                 pass
+(TRUE FALSE TRUE FALSE)                            pass
+65                                                 pass
+90                                                 pass
+65                                                 pass
+49                                                 pass
+97                                                 pass
+122                                                pass
+97                                                 pass
+49                                                 pass
+(TRUE FALSE)                                       pass
+(TRUE TRUE TRUE TRUE)                              pass
+(TRUE TRUE FALSE)                                  pass
+(TRUE FALSE)                                       pass
+(TRUE TRUE FALSE FALSE)                            pass
+(TRUE FALSE)                                       pass
+TRUE                                               pass
+(TRUE FALSE FALSE)                                 pass
+(FALSE TRUE FALSE)                                 pass
+(TRUE FALSE)                                       pass
+(FALSE TRUE FALSE)                                 pass
+(FALSE FALSE FALSE FALSE)                          pass
+65                                                 pass
+TRUE                                               pass
+FALSE                                              pass
+TRUE                                               pass
+(TRUE FALSE)                                       pass
+(TRUE FALSE)                                       pass
+(TRUE TRUE)                                        pass
+(65 98)                                            pass
+(3 2 1)                                            pass
+(4 6)                                              pass
+((1 4 6) (2 5 7))                                  pass
+NIL                                                pass
+
+( total: 212  pass: 212  NG: 0 )
+NIL

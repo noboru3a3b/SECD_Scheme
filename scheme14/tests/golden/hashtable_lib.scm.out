@@ -1,0 +1,14 @@
+
+Red-Black Tree Library (Improved) loaded.
+Commands:
+  (rb-test)      - Run comprehensive tests
+  (rb-example)   - Run simple example
+
+Hash Table Library (Fixed with Chaining) loaded.
+Supported key types: numbers, strings, symbols, booleans
+
+Commands:
+  (ht-test-collision)   - Test hash collision handling
+  (ht-test-basic)       - Basic functionality test
+  (ht-test-stress 1000) - Stress test with N entries
+NIL

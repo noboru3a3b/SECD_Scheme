@@ -1,0 +1,222 @@
+
+=== Compiled Code ===
+[0] LDC 1
+[1] LDC 2
+[2] LDG +
+[3] APP 2
+[4] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDG a
+[1] SEL
+      then:
+        [0] LDG b
+        [1] JOIN
+      else:
+        [0] LDG c
+        [1] JOIN
+[2] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDF (n)
+      body:
+        [0] LD (0 . 0)
+        [1] LDC 0
+        [2] LDG =
+        [3] APP 2
+        [4] SELR
+              then:
+                [0] LDC 1
+                [1] RTN
+              else:
+                [0] LD (0 . 0)
+                [1] LDG f
+                [2] TAPP 1
+                [3] RTN
+        [5] RTN
+[1] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDC 1
+[1] DEF x
+[2] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDF (x) ; m
+      body:
+        [0] LD (0 . 0)
+        [1] RTN
+[1] DEFM m
+[2] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDF (a)
+      body:
+        [0] LDC 1
+        [1] LSET (0 . 0)
+        [2] RTN
+[1] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDC 1
+[1] GSET x
+[2] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDC 1
+[1] POP
+[2] LDC 2
+[3] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDF (k)
+      body:
+        [0] LD (0 . 0)
+        [1] RTN
+[1] CALLCC
+[2] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDF ()
+      body:
+        [0] LDF (k)
+              body:
+                [0] LD (0 . 0)
+                [1] RTN
+        [1] TCALLCC
+        [2] RTN
+[1] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDC 1
+[1] LDC 2
+[2] LDG list
+[3] APP 2
+[4] ARGS-AP 1
+[5] LDG +
+[6] APPLY
+[7] STOP
+=====================
+
+=== Compiled Code ===
+[0] LDF ()
+      body:
+        [0] LDC 1
+        [1] LDC 2
+        [2] LDG list
+        [3] APP 2
+        [4] ARGS-AP 1
+        [5] LDG +
+        [6] TAPPLY
+        [7] RTN
+[1] STOP
+=====================
+
+=== Disassembly ===
+Parameters: (a b)
+Body:
+[0] LD (0 . 0)
+[1] LD (0 . 1)
+[2] LDG *
+[3] TAPP 2
+[4] RTN
+Environment: 0 frame(s)
+===================
+
+=== Disassembly ===
+Parameters: (x)
+Body:
+[0] LD (0 . 0)
+[1] LD (1 . 0)
+[2] LDG +
+[3] TAPP 2
+[4] RTN
+Environment: 1 frame(s)
+===================
+
+=== Macros ===
+delay
+==============
+
+=== Macros ===
+delay
+unless
+==============
+Trace mode: ON
+
+==== Step 0 ====
+PC: 2
+Instruction: STOP
+Stack: 
+  [0] :trace-on
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 0 ====
+PC: 0
+Instruction: LDC 1
+Stack: (empty)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 1 ====
+PC: 1
+Instruction: LDC 2
+Stack: 
+  [0] 1
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 2 ====
+PC: 2
+Instruction: LDG +
+Stack: 
+  [0] 2
+  [1] 1
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 3 ====
+PC: 3
+Instruction: APP 2
+Stack: 
+  [0] (PRIMITIVE +)
+  [1] 2
+  [2] 1
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 4 ====
+PC: 4
+Instruction: STOP
+Stack: 
+  [0] 3
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 0 ====
+PC: 0
+Instruction: LDG trace-off
+Stack: (empty)
+Environment: (empty)
+Dump: 0 frame(s)
+
+==== Step 1 ====
+PC: 1
+Instruction: APP 0
+Stack: 
+  [0] (PRIMITIVE trace-off)
+Environment: (empty)
+Dump: 0 frame(s)
+Trace mode: OFF
+:trace-off

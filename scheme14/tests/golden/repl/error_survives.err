@@ -1,0 +1,5 @@
+Error: <stdin:2>:1:1: car: wrong type of argument
+  expected: a pair
+  given: 5
+    (car 5)
+    ^

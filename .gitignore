@@ -15,6 +15,13 @@
 # MinGW 版は GC のランタイム DLL を実行ファイルの隣にも置く（決定162）
 /scheme13/*.dll
 
+# scheme14 のビルド成果物（開発環境は Windows / w64devkit）
+/scheme14/scheme14.exe
+/scheme14/scheme13
+/scheme14/scheme13.exe
+/scheme14/.bench.scm
+/scheme14/*.dll
+
 # クラッシュダンプ
 /core.*
 

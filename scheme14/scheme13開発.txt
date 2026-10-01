@@ -1,0 +1,83 @@
+【これは現行の仕様ではない】
+
+このファイルは、利用者が AI に出した作業指示の控えである。
+凍結仕様でも実装解説でもない。各段落の時刻は、その指示が出た日に止まっている。
+
+いまの数の仕様は `dev_memo.md` の §2（凍結仕様）と `scheme13解説.md` の第2章を見ること。
+「次に何をするか」は `dev_memo.md` の §8 を見ること。
+
+浮動小数点数について: 下の「仕様の再検討をお願いします」は 18日目の指示である。
+設計は決定 80〜95、実装は 19〜21日目、文書追随は 22日目で終わっている。
+仕様の再検討をやり直さないこと。有理数は入れない（決定 83）。
+
+-----
+
+scheme13 の開発を継続してください。
+
+scheme12_debug を一貫した設計思想のもとで開発し直すため、
+Claude Code により、2026-09-04 16:00 に開発開始。
+
+1日分の設計作業を１日分のクレジット内で終わらせ、
+翌日に同じ設計思想を引き継ぐため、開発メモ scheme13\dev_memo.md を使用します。
+
+また、scheme12_debug のベースになった micro_Scheme8.lisp の解説として、
+解説文書 scheme13\micro_scheme8_notes.md があります。
+
+-----
+
+scheme13/ に、scheme13のソースプログラム scheme13.cpp とその解説文書があります。
+
+以下のWebサイトは、Scheme言語で記述された MIT の計算機科学の教科書 SICP
+「Structure and Interpretation of Computer Programs」の全テキストを公開しているサイトです。
+このサイトで1章づつ SICP を学びつつ、解説されているプログラムを scheme13 で実装してテストし、
+それによって、scheme13 がScheme処理系として問題なく動作することを、実地に確認してください。
+
+https://mitp-content-server.mit.edu/books/content/sectbyfn/books_pres_0/6515/sicp.zip/full-text/book/book-Z-H-4.html#%_toc_start
+
+確認は1章づつ進めてください。
+
+-----
+
+そろそろ浮動小数点数に取り組む時期に来た気がします。
+
+先ほどscheme13でSICPの第1章のプログラムを実装して動かす実験をしたのですが、
+浮動小数点が無いので、問題を整数に読み替えて実装させる結果になりました。
+
+やはり実用的なシステムには、浮動小数点数が必要だと思います。
+しかしscheme13は整数のみで割り切って仕様が出来ているので、
+今から浮動小数点数を足すには、慎重に仕様を検討しなおす必要があると思います。
+
+まず、浮動小数点数を含めた、仕様の再検討をお願い致します。
+
+1日分の設計作業を１日分のクレジット内で終わらせ、
+翌日に同じ設計思想を引き継ぐため、開発メモ scheme13\dev_memo.md を使用します。
+
+また、scheme12_debug のベースになった micro_Scheme8.lisp の解説として、
+解説文書 scheme13\micro_scheme8_notes.md があります。
+
+-----
+
+scheme13/ に、scheme13のソースプログラム scheme13.cpp とその解説文書があります。
+
+以下のWebサイトは、Scheme言語で記述された MIT の計算機科学の教科書 SICP
+「Structure and Interpretation of Computer Programs」の全テキストを公開しているサイトです。
+このサイトで1章づつ SICP を学びつつ、解説されているプログラムを scheme13 で実装してテストし、
+それによって、scheme13 がScheme処理系として問題なく動作することを、実地に確認してください。
+
+https://mitp-content-server.mit.edu/books/content/sectbyfn/books_pres_0/6515/sicp.zip/full-text/book/book-Z-H-4.html#%_toc_start
+
+確認は1章づつ進めてください。
+
+1日分の設計作業を１日分のクレジット内で終わらせ、
+翌日に同じ設計思想を引き継ぐため、開発メモ scheme13\dev_memo.md を使用します。
+
+また、scheme12_debug のベースになった micro_Scheme8.lisp の解説として、
+解説文書 scheme13\micro_scheme8_notes.md があります。
+
+-----
+
+【37日目の追記（2026-09-26）】
+
+上の浮動小数点の指示は完了している。凍結仕様 §2 は 18日目に改訂済みで、
+実装と `scheme13解説.md` も追随済み。このファイルを正本として読まないこと。
+役割の決定は `dev_memo.md` の決定 165。

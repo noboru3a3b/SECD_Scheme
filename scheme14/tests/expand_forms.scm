@@ -1,0 +1,17 @@
+; scheme13 の構文展開を scheme12 と突き合わせるための入力。
+; 1行に1フォーム（compare_expand.sh が行単位で処理する）。
+(let ((x 1) (y 2)) (+ x y))
+(let loop ((i 0)) (loop i))
+(let* ((x 1) (y x)) (+ x y))
+(let* () (a) (b))
+(letrec ((f (lambda (n) (f n)))) (f 1))
+(and a b c)
+(or a b c)
+(cond ((p x) 1) ((q x)) (else 2))
+(case k ((1 2) a) ((3) b) (else c))
+(do ((i 0 (+ i 1)) (acc 1)) ((= i 3) acc) (g i))
+(do ((i 0)) ((f i)))
+`(a ,x ,@y . ,z)
+`#(1 ,x)
+`(a (b ,c) ,@d)
+(let ((x 1)) (define (h y) y) (h x))

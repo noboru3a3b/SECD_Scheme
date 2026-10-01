@@ -1,0 +1,15 @@
+
+Red-Black Tree Library (Improved) loaded.
+Commands:
+  (rb-test)      - Run comprehensive tests
+  (rb-example)   - Run simple example
+
+Red-Black Tree Stress Test Library (Safe) loaded.
+Commands:
+  (rb-quick-test)             - Quick 100 insertions test
+  (rb-small-scale-test)       - 500 insertions, 250 deletions
+  (rb-medium-scale-test)      - 2000 insertions, 1000 deletions
+  (rb-large-scale-test-safe)  - Safe large-scale test
+  (gc-info)                   - Show GC information
+  (gc-collect)                - Force garbage collection
+NIL

@@ -1,0 +1,17 @@
+(a b c d e f)
+((a b) (c d) e f g)
+(e d c b a)
+((d e) c (a b))
+(a b c d e)
+(c d e)
+FALSE
+(a 1)
+(e 5)
+FALSE
+(a b c d e)
+((1) (2) (3) (4) (5))
+((a . a) (b . b) (c . c) (d . d) (e . e))
+(b c b c b c)
+(((((NIL . a) . b) . c) . d) . e)
+(a b c d e)
+NIL

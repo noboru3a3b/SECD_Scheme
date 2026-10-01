@@ -1,0 +1,21 @@
+TRUE                                               pass
+big                                                pass
+1000000                                            pass
+TRUE                                               pass
+1000001                                            pass
+0                                                  pass
+FALSE                                              pass
+FALSE                                              pass
+1000000                                            pass
+1000000                                            pass
+1000000                                            pass
+TRUE                                               pass
+FALSE                                              pass
+sink                                               pass
+wrote                                              pass
+displayed                                          pass
+TRUE                                               pass
+6                                                  pass
+
+( total: 18  pass: 18  NG: 0 )
+NIL
