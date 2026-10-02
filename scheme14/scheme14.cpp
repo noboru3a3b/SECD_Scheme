@@ -51,8 +51,19 @@
 // （10日目の決定50）。libc の一部であって新しい依存ではない。POSIX 以外
 // （root の Makefile が想定する MinGW）には対応する術がないので、
 // そちらでは常に「読める」と答える。
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <poll.h>
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
 #endif
 
 #define GC_NO_INLINE_STD_NEW
@@ -4219,6 +4230,90 @@ static ValuePtr prim_load(ValuePtr* a, std::size_t n) {
     return load_from_path(to_std(str_of(a[0], "load")));
 }
 
+// §4.6。プログラム名と引数の列を、シェルを通さずに起動する。
+// OS の名前はこの手続きの中だけ。子には OS の標準ストリームを継がせる。
+#if defined(_WIN32)
+static void append_windows_arg(std::string& cmd, const std::string& arg) {
+    if (!cmd.empty()) cmd.push_back(' ');
+    bool quote = arg.empty() || arg.find_first_of(" \t\n\v\"") != std::string::npos;
+    if (!quote) {
+        cmd.append(arg);
+        return;
+    }
+    cmd.push_back('"');
+    std::size_t i = 0;
+    for (;;) {
+        unsigned n = 0;
+        while (i < arg.size() && arg[i] == '\\') { ++i; ++n; }
+        if (i == arg.size()) {
+            cmd.append(static_cast<std::size_t>(n) * 2, '\\');
+            break;
+        }
+        if (arg[i] == '"') {
+            cmd.append(static_cast<std::size_t>(n) * 2 + 1, '\\');
+            cmd.push_back('"');
+            ++i;
+        } else {
+            cmd.append(n, '\\');
+            cmd.push_back(arg[i]);
+            ++i;
+        }
+    }
+    cmd.push_back('"');
+}
+#endif
+
+static ValuePtr prim_system(ValuePtr* a, std::size_t n) {
+    need_args("system", n, 1, 0);
+    std::vector<std::string> args;
+    args.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) args.push_back(to_std(str_of(a[i], "system")));
+    std::fflush(stdout);
+    std::fflush(stderr);
+#if defined(_WIN32)
+    std::string cmd;
+    for (const std::string& arg : args) append_windows_arg(cmd, arg);
+    if (cmd.size() >= 32767)
+        prim_error("system", "cannot run program" + detail("given", args[0]));
+    STARTUPINFOA si;
+    std::memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    std::memset(&pi, 0, sizeof(pi));
+    if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                        0, nullptr, nullptr, &si, &pi))
+        prim_error("system", "cannot run program" + detail("given", args[0]));
+    DWORD code = 1;
+    BOOL ok = WaitForSingleObject(pi.hProcess, INFINITE) == WAIT_OBJECT_0
+              && GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (!ok)
+        prim_error("system", "cannot run program" + detail("given", args[0]));
+    return make_int(static_cast<long long>(code));
+#else
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (std::string& arg : args) argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    pid_t pid = 0;
+    int rc = posix_spawnp(&pid, args[0].c_str(), nullptr, nullptr, argv.data(), environ);
+    if (rc != 0)
+        prim_error("system", "cannot run program" + detail("given", args[0]));
+    int status = 0;
+    for (;;) {
+        pid_t w = waitpid(pid, &status, 0);
+        if (w < 0 && errno == EINTR) continue;
+        if (w < 0)
+            prim_error("system", "cannot run program" + detail("given", args[0]));
+        break;
+    }
+    if (WIFEXITED(status)) return make_int(WEXITSTATUS(status));
+    if (WIFSIGNALED(status)) return make_int(128 + WTERMSIG(status));
+    prim_error("system", "cannot run program" + detail("given", args[0]));
+#endif
+}
+
 // R5RS 6.5。版は 5 だけ。need_args の hi == 0 は「上限なし」なので、
 // 引数0個の interaction-environment はここでは自分で数える。
 static void need_exact_zero(const char* who, std::size_t n) {
@@ -4335,6 +4430,7 @@ static void init_globals() {
         {"%set-current-output-port!", prim_set_current_output_port},
         {"input-port?", prim_input_portp}, {"output-port?", prim_output_portp},
         {"load", prim_load},
+        {"system", prim_system},
 
         {"values", prim_values}, {"%values->list", prim_values_to_list},
         {"%wind-push", prim_wind_push}, {"%wind-pop", prim_wind_pop},
@@ -5701,6 +5797,31 @@ static void selftest_scheme_eval() {
              eval_error_body("(scheme-report-environment 'a)"),
              "scheme-report-environment: wrong type of argument\n"
              "  expected: an integer\n  given: a");
+
+    check_eq("system arity",
+             eval_error_body("(system)"),
+             "system: wrong number of arguments\n"
+             "  expected: at least 1 argument\n  given: 0");
+    check_eq("system type",
+             eval_error_body("(system 1)"),
+             "system: wrong type of argument\n  expected: a string\n  given: 1");
+#if defined(_WIN32)
+    check_eq("system exit 0",
+             eval_to_string("(system \"cmd.exe\" \"/c\" \"exit\" \"0\")"), "0");
+    check_eq("system exit 7",
+             eval_to_string("(system \"cmd.exe\" \"/c\" \"exit\" \"7\")"), "7");
+    check_eq("system missing",
+             eval_error_body("(system \"scheme14-no-such-program\")"),
+             "system: cannot run program\n  given: scheme14-no-such-program");
+#else
+    check_eq("system exit 0",
+             eval_to_string("(system \"true\")"), "0");
+    check_eq("system exit 7",
+             eval_to_string("(system \"sh\" \"-c\" \"exit 7\")"), "7");
+    check_eq("system missing",
+             eval_error_body("(system \"scheme14-no-such-program\")"),
+             "system: cannot run program\n  given: scheme14-no-such-program");
+#endif
 }
 
 // --- REPL ------------------------------------------------------------------

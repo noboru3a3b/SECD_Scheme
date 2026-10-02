@@ -391,6 +391,7 @@ Error: mylib.scm:1:1: car: wrong type of argument
   | `unbound variable: <name>` | 未束縛の参照 |
   | `attempt to call a non-procedure` | 呼べないものを呼んだ |
   | `internal error: <what>` | **処理系自身の不変条件が壊れた。利用者の誤りではない** |
+  | `<who>: cannot run program` | `system` がプロセスを起動できなかった。`given:` はプログラム名 |
 
   詳細行のラベルは `expected` / `given` / `note` の3つ。`note` は expected/given に
   当てはまらない補足（未束縛の説明、内部エラーの断り書き）にだけ使う。
@@ -626,6 +627,30 @@ R5RS 6.5 の4手続きを足す。`eval`、`interaction-environment`、`scheme-r
 - 3つの環境は互いに `eq?` で偽。同じ手続きの2回の結果は真。
 - 引数個数、版の `5` 以外、環境でない第2引数は、上の見出しで落ちる。
 
+### 4.6 `system`（2026-10-02 に設計し、同日実装）
+
+原典 `micro_Scheme8.lisp` の外部コマンド実行を、手続き `system` として入れた。解説は [scheme14解説.md](scheme14解説.md)。Windows での実コマンド確認は `tests/system_win_test.scm`。
+
+`(system program arg ...)`。`program` と各 `arg` は文字列で、1個目は必須、2個目以降は何個でもよい。`(system "git" "status")` も `(system "git")` もこの形である。引数はデータであり、シェルのスクリプトではない。`&&` や `|` や引用符を、この手続きは解釈しない。
+
+戻り値は終了コードの整数である。`0` が成功。POSIX でシグナル終了したときは `128` にシグナル番号を足す。Windows の終了コードは 255 で切らない。起動できなかったときは終了コードを返さず、`system: cannot run program` とし、`given:` にプログラム名を書く。引数が0個なら `wrong number of arguments`。文字列でない引数は `wrong type of argument`、`expected: a string`。
+
+子プロセスには、scheme14 自身が OS から受け取った標準入力・標準出力・標準エラーを継がせる。`current-output-port` や `with-output-to-file` の先には流さない。子が終わるまで `system` は戻らない。
+
+OS の名前は、この手続きの本体にだけ書く。Scheme から OS を尋ねる手続きは足さない。できた実行ファイルには、ビルドした側の起動処理だけが残る。
+
+- Linux と Unix は `posix_spawnp` で PATH を探し、`waitpid` で待つ。`fork` は使わない。Boehm GC のロックを子が抱えないためである。
+- Windows は `CreateProcess` で起動し、終了を待つ。プログラム名は `open-input-file` と同じバイト列で渡し、この処理系の中でワイド文字列へ変換しない。引数の列は、Windows がコマンドラインを分解する規則で、この手続きが引用符を付けてから渡す。利用者が OS ごとに引用符を書くことはない。ディレクトリ区切りの無い名前は PATH から探し、拡張子が無ければ `.exe` を補う。
+
+新しいライブラリは足さない（§1.2）。`posix_spawnp` は libc、`CreateProcess` は Windows のビルドが既にリンクしている範囲である。
+
+却下した案は次である。
+
+- 標準 C の `system` にコマンドライン文字列を1つ渡す。ソースに OS の名前は要らないが、Windows のビルドでは `cmd.exe`、Unix のビルドでは `sh` がその文字列を読む。
+- 原典の引数の形 `(system prog arg1 (list ...))` を保つ。`run-program` がリストを要求していた写しなので、残りの引数を並べる形にする。
+- `fork` してから `exec` する。
+- 子の出力を `current-output-port` へ繋ぐ。
+
 ---
 
 ## 5. 受け入れ基準
@@ -782,12 +807,14 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - 決定24 — **ファイル上のセクション順を §3 の番号どおりに並べ直さない。** 命令セットがコンパイラより前にある。
 - 決定41・58・59 — **`error`、多値、`dynamic-wind` は入っている。** `with-exception-handler` は無い。§1.4 の当初の「入れない」はここまで改まっている。外さない。
 - **`eval` は §4.5。** フレームを値にしない。式は呼び出した VM で走らせ、`STOP` も別 VM も使わない。空の環境は特殊形式の写しと `:undef`。未束縛参照のセルは対話環境の表にだけ足す。
+- **`system` は §4.6。** プログラム名と引数の列を渡し、終了コードを返す。OS の分岐はこの手続きの中だけ。シェルの文字列にはしない。子の出力は OS の標準ストリームで、`current-output-port` には従わない。
 - **scheme13 の成果は引き継ぐ。** 設計の統一、SICP の動作確認、浮動小数点数は土台である。メモを短くしたのは継続のためで、これらを外すためではない。引き継ぎに使うメモは `scheme14/dev_memo.md`。`scheme13/dev_memo.md` は保存版。
 - **`scheme13/` は保存する。** scheme14 の作業でそこを直さない。scheme12 も消さない。`scheme12_debug解説.md` も消さない（決定44・157）。
 - **ルートの Makefile 4本は写しである。** 1本直したら4本直す。ルートから `make -C scheme13` へ委譲しない（決定158）。`scheme14/Makefile` は Windows 用で、あの4本とは別。ルートで `make` すると scheme13 がビルドされる。scheme14 を測るときは `make -C scheme14`。
 - **`scheme14/scheme14.exe` のパスを動かさない。** この Makefile とテストがここを指している。
 - 決定74 — `code` 特殊形式は入れない。有理数も入れない（§2.3）。
 - 決定57 — **性能の候補を足す前に、命令の実行回数を数える。** `make -C scheme14 bench` だけを見て判断しない。§5.3 の赤黒木の行は36日目より前の値なので、決定164 と直接比べない。
+- **赤黒木 `rbtree_lib_improved.scm` は信頼してよい**（2026-10-02 の続報）。整数キーで、手続きが返した根を次へ渡す。無いキーの削除が形を動かすことと、`rb-search` が `false` を値と不在の両方に返すことは、直さない。
 - 決定165 — `scheme13開発.txt` もこのログも、現行の未着手ではない。
 
 ---
@@ -803,9 +830,10 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - 実行ファイルは `scheme14/scheme14.exe`。GC の DLL はその隣に置く。
 - 標準出力と標準エラーはテキストモードで、改行は CRLF。ゴールデンも CRLF。
 - 数は正確な整数と不正確な実数。有理数と複素数は無い。`(+ 1 1.5)` は `2.5`、`(/ 7 2)` は `3`、`(/ 7 2.0)` は `3.5`、`(sqrt 2)` は `1.4142135623730951`、`(sqrt 16)` は `4`、`(expt 2 -3)` は `0.125`。
-- 大域名 279、プリミティブ 143、`lib14.scm` の定義 75。29日目は 275 / 139 / 75 で、増分は `eval` と環境の4手続きである。測り方は決定40。
+- 大域名 280、プリミティブ 144、`lib14.scm` の定義 75。29日目は 275 / 139 / 75。増分は `eval` と環境の4手続き、および `system` である。測り方は決定40。
 - `tests/spec_test.scm` は §2 の各行を1行ずつ写している。§2 を改めたら、同じ順序で直す。
-- `scheme13解説.md` は scheme13 時点の説明である。振る舞いを変えたら追随する。ずれやすいのは命令一覧、プリミティブの数、テストの件数、互換性、R5RS の不足。正本は §2 とこの §7。
+- `scheme13解説.md` は scheme13 時点の説明である。scheme14 で足した機能の解説は `scheme14解説.md`。振る舞いを変えたら、変わった側の文書を追随する。ずれやすいのは命令一覧、プリミティブの数、テストの件数、互換性、R5RS の不足。正本は §2 とこの §7。
+- `system` は 2026-10-02 に §4.6 で入れた。呼び出しは `(system program arg ...)`。
 
 2026-10-01 に、この Windows で走らせた結果:
 
@@ -817,6 +845,17 @@ make -C scheme14 test       #  42 passed, 0 failed
 make -C scheme14 sicp       #  25 passed, 0 failed（主張 1050 件）
 ```
 
+2026-10-02 に、この Windows で走らせた結果。`compare` / `test` / `sicp` はこの日は走らせていない。上の 2026-10-01 の結果が、それらの最新の実測である。
+
+```sh
+scheme14/scheme14.exe --selftest
+# 342 checks, 0 failed
+scheme14/scheme14.exe --load scheme14/tests/system_win_test.scm
+# *** ALL SYSTEM CHECKS PASSED ***
+```
+
+`system_win_test.scm` はディレクトリの作成と表示、子プロセスでの作業ディレクトリ移動、ファイルの書き込みと読み戻し、空白を含む経路、`copy`、`move`、`del`、終了コード、無いディレクトリの非ゼロ終了を見ている。ゴールデンには入れていない。出力が OS に依存するためである。
+
 `test-case6.scm` は 145項目が式ごとに主張する（132 pass / 13 NG。NG の内訳は `tests/golden/README.md`）。scheme12 にこのスイートを渡すと落ちる。`test-case6.scm` のゴールデンは決定27・32で採り直した照合結果で、改行は CRLF である。`scheme13/tests/golden/` のファイルで上書きしない。`lib14_test.scm` には比べる相手が無い（決定27）。
 
 ---
@@ -826,9 +865,8 @@ make -C scheme14 sicp       #  25 passed, 0 failed（主張 1050 件）
 未着手は次だけ。終えた手順はここに書き戻さない。記録はログにある。
 
 1. **FreeBSD / NetBSD での起動確認。** 利用者の手元でしか建てられない。通ったと書かず、確かめたら §7 に書く。Windows は起動まで確認済み。
-2. **原典にあってまだ入れていない3つ。** どれも利用者判断で、急がない。
+2. **原典にあってまだ入れていないもの。** 利用者判断で、急がない。
    - `print` — 3行。`test-case6.scm` は使っていない。
-   - `system` — 入れるなら §1.2 と安全性を先に議論する。
    - `compile-print` — `(compile expr)` と重複が大きい。見送りでよい。
 3. **性能の次の一手は、測ってから足す**（決定57）。残っている重い案は、引数が固定数のときフレームをスタックに置くこと（継続がスタックをコピーする設計と噛み合うか要検討）、と computed goto（§1.5 の読みやすさを損なうので、必要になるまでやらない）。
 4. **SICP の残り演習。** やるなら先に利用者に諮る。解いても処理系について新しいことは分からない見込み（決定128〜131 の後）。
@@ -864,5 +902,6 @@ make -C scheme14 sicp       #  25 passed, 0 failed（主張 1050 件）
   読解メモ: [`micro_scheme8_notes.md`](micro_scheme8_notes.md)
   実行: `sbcl --script micro_Scheme8.lisp`（リポジトリのルートで。`quit` で終了）
 - scheme12 で直した不具合の経緯: `git log` の `4bf8ed6`〜`05f7cf8`
+- scheme14 で足した機能: [`scheme14解説.md`](scheme14解説.md)（`eval` と `system`）
 - 決定の全文: [`log/decisions.md`](log/decisions.md)（**現行の作業指示ではない。**）
 - 利用者の作業指示の控え: `scheme13開発.txt`（**現行の仕様ではない。** 決定165）
