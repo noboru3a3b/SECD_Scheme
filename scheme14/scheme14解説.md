@@ -3,7 +3,7 @@
 scheme13 のあと、scheme14 で新たに加わった機能の解説。
 土台の処理系そのものは [`scheme13解説.md`](scheme13解説.md) にある。ここには差分だけを書く。
 
-対象は `scheme14/scheme14.cpp`。`eval` と `system` は、どちらもこのファイルに入っている。
+対象は `scheme14/scheme14.cpp`。`eval` と `system` と、`number->string` / `string->number` の基数は、このファイルに入っている。
 
 ---
 
@@ -16,7 +16,7 @@ scheme13 のあと、scheme14 で新たに加わった機能の解説。
 | `dev_memo.md` | **なぜそう決めたか。** 設計憲章、凍結仕様、アーキテクチャ | 次に手を入れる人 |
 | `micro_scheme8_notes.md` | 原典 `micro_Scheme8.lisp` の読解 | 由来を知りたい人 |
 
-判断の根拠は `dev_memo.md` にある。`eval` は §4.5、`system` は §4.6。経緯は `log/decisions.md` の末尾「続報」。
+判断の根拠は `dev_memo.md` にある。`eval` は §4.5、`system` は §4.6、基数は §4.7。経緯は `log/decisions.md` の末尾「続報」。
 
 振る舞いを変えたら、この文書も直す。
 
@@ -368,3 +368,123 @@ POSIX でプロセスがシグナルで終わったときは、`128` にその�
 (system "scheme14-no-such-program")                              ; system: cannot run program
 (system "ls" "no-such-dir")                                      ; => 2
 ```
+
+---
+
+## 3. `number->string` と `string->number` の基数（2026-10-03 に実装）
+
+規則は `dev_memo.md` §4.7 と同じである。2026-10-03 に、この Windows の `--selftest` で下の式を確認した。370 checks, 0 failed のうち、基数の分が入っている。
+
+```
+(number->string 255)          ; => "255"
+(string->number "255")        ; => 255
+(string->number "1.5")        ; => 1.5
+(number->string 255 16)       ; => "ff"
+```
+
+ソースに直接書ける数は 10 進である。16進で欲しい値は、10進の整数として書くか、16進の文字列を `string->number` で読む。機械の中の値は正確な整数で、10進や16進という区別は、文字列に出すときと文字列から読むときにだけ付く。
+
+```
+(number->string 255 16)       ; => "ff"
+(string->number "ff" 16)      ; => 255
+```
+
+### 3.1 引数が1個のときと、基数が 10 のとき
+
+この二つは、今の10進の経路をそのまま使う。`number->string` は `write` と同じ表示、`string->number` はリーダと同じ読み取りである。実数、`+inf.0`、`+nan.0` も今どおり読む。10進の書式は一つだけにする。
+
+```
+(number->string 1.5)          ; => "1.5"
+(number->string 1.5 10)       ; => "1.5"
+(string->number "1.5" 10)     ; => 1.5
+(string->number "+inf.0")     ; => +inf.0
+```
+
+第2引数を省略したときは、基数 10 とみなす。
+
+### 3.2 2、8、16 は正確な整数だけ
+
+基数は正確な整数で、2、8、10、16 のいずれかである。2、8、16 の対象は正確な整数だけである。
+
+```
+(number->string 255 16)        ; => "ff"
+(number->string 255 8)         ; => "377"
+(number->string 255 2)         ; => "11111111"
+(number->string -255 16)       ; => "-ff"
+(number->string 0 2)           ; => "0"
+(string->number "ff" 16)       ; => 255
+(string->number "FF" 16)       ; => 255
+(string->number "377" 8)       ; => 255
+(string->number "11111111" 2)  ; => 255
+(string->number "+10" 16)      ; => 16
+(string->number "-0" 16)       ; => 0
+(string->number "00ff" 16)     ; => 255
+```
+
+出力に `#x` や `#b` は付けない。16進の `a` から `f` は小文字である。負なら先頭に `-` を付ける。正に `+` は付けない。余分な先頭の 0 は付けない。0 は `"0"` である。桁数の上限は置かない。2の100乗は16進で `1` のあとに `0` が25個であり、2026-10-03 の `--selftest` で確認した。
+
+```
+(number->string (string->number "1267650600228229401496703205376") 16)
+                                  ; => "10000000000000000000000000"
+```
+
+読み取りは、文字列全体が「符号が任意で1つ、その後にその基数の数字が1つ以上」のときだけ正確な整数を返す。2進は `0` と `1`、8進は `0` から `7`、16進は `0` から `9` と `a` から `f` である。入力の大文字と小文字は同じ数字である。先頭の 0 は許す。`"-0"` の値は正確な 0 である。
+
+空白、小数点、指数、`#` で始まる接頭辞は受けない。形が外れたらエラーにせず `false` を返す。
+
+```
+(string->number "1.5" 16)      ; => false
+(string->number "#xff" 16)     ; => false
+(string->number "ff" 2)        ; => false
+(string->number "" 16)         ; => false
+(string->number "+" 16)        ; => false
+```
+
+正確な整数 `n` と基数 `r`（2、8、10、16）について、次は真になる。
+
+```
+(eqv? n (string->number (number->string n r) r))
+```
+
+### 3.3 エラー
+
+個数は 1 個または 2 個である。0 個や 3 個以上は `wrong number of arguments`、`expected: 1 to 2 arguments`。
+
+基数の検査は、第1引数が手続きの求める型だと分かったあとで行う。数でないものを `number->string` に渡すと、基数より先に `expected: a number` で止まる。文字列でないものを `string->number` に渡すと、`expected: a string` で止まる。
+
+```
+(number->string "ff" 16)       ; number->string: wrong type of argument
+                               ;   expected: a number
+(string->number 255 16)        ; string->number: wrong type of argument
+                               ;   expected: a string
+```
+
+基数そのものが正確な整数でなければ `wrong type of argument`、`expected: an integer`。`16.0` はここである。正確な整数だが 2、8、10、16 のどれでもなければ `argument out of range`、`expected: 2, 8, 10, or 16`。
+
+```
+(number->string 255 16.0)      ; wrong type of argument
+                               ;   expected: an integer
+(number->string 255 3)         ; argument out of range
+                               ;   expected: 2, 8, 10, or 16
+```
+
+基数が 2、8、16 で、変換する数が正確な整数でなければ `wrong type of argument`、`expected: an exact integer`。`8.0` や `1.5` や `+inf.0` はここである。
+
+```
+(number->string 1.5 16)        ; wrong type of argument
+                               ;   expected: an exact integer
+(number->string 8.0 2)         ; wrong type of argument
+                               ;   expected: an exact integer
+```
+
+### 3.4 リーダは変えない
+
+ソースに書いた `#b` `#o` `#d` `#x` `#e` `#i` は、数の接頭辞にしない。`#xff` はシンボルとして読まれる。それを評価すると `unbound variable: #xff` になる。整数が欲しいときは `(string->number "xff" 16)` と書く。2、8、16 の変換は、その基数が渡されたときのこの2手続きの中だけに置く。
+
+### 3.5 採らなかった形
+
+2、8、16 で不正確な数も出す形は採らない。倍精度を、読み戻すと同じビットになる別の基数で書く仕事は、10進の表示とは別になる。
+
+リーダに `#xff` や `#b101` を足す形も採らない。数のトークンの規則は凍結してある。
+
+2、8、10、16 以外の基数を受ける形も採らない。出力を大文字にする形、`#x` を付ける形も採らない。往復で戻る文字列を一つに決めるためである。

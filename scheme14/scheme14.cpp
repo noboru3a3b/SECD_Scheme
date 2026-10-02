@@ -3632,17 +3632,86 @@ static ValuePtr prim_string_to_symbol(ValuePtr* a, std::size_t n) {
     need_args("string->symbol", n, 1, 1);
     return make_symbol(view_of(str_of(a[0], "string->symbol")));
 }
-// write と同じ関数で書く（書式を2つ持たない。18日目の決定90）
-static ValuePtr prim_number_to_string(ValuePtr* a, std::size_t n) {
-    need_args("number->string", n, 1, 1);
-    if (!is_number(a[0])) prim_type_error("number->string", "a number", a[0]);
-    return make_string(to_string(a[0]));
+// §4.7。基数は 2、8、10、16 だけ。10 と省略は下の10進の経路へ戻す。
+static int radix_of(ValuePtr v, const char* who) {
+    BigInt n = num_of(v, who);
+    if (n == 2 || n == 8 || n == 10 || n == 16) return static_cast<int>(n);
+    prim_error(who, "argument out of range" +
+               expected_given("2, 8, 10, or 16", to_string(v)));
 }
-// リーダと同じ判定を使う（数の文法を2つ持たない。決定89）
+
+static int radix_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+// 正確な整数を、接頭辞なし・小文字・余分な 0 なしで書く。0 は "0"。
+static std::string exact_int_to_radix(ValuePtr v, int radix) {
+    BigInt n = num_of(v, "number->string");
+    if (n < 0) {
+        std::string s = exact_int_to_radix(make_int(-n), radix);
+        s.insert(s.begin(), '-');
+        return s;
+    }
+    if (n == 0) return "0";
+    BigInt base(radix);
+    std::string digits;
+    while (n > 0) {
+        int d = static_cast<int>(n % base);
+        digits.push_back(static_cast<char>(d < 10 ? '0' + d : 'a' + (d - 10)));
+        n /= base;
+    }
+    std::reverse(digits.begin(), digits.end());
+    return digits;
+}
+
+// 符号が任意で1つ、その後にその基数の数字が1つ以上。外れたら false。
+static bool exact_int_from_radix(std::string_view tok, int radix, ValuePtr* out) {
+    if (tok.empty()) return false;
+    std::size_t i = 0;
+    bool neg = false;
+    if (tok[0] == '+' || tok[0] == '-') {
+        neg = tok[0] == '-';
+        i = 1;
+    }
+    if (i >= tok.size()) return false;
+    BigInt n = 0;
+    BigInt base(radix);
+    for (; i < tok.size(); ++i) {
+        int d = radix_digit(tok[i]);
+        if (d < 0 || d >= radix) return false;
+        n = n * base + d;
+    }
+    if (neg && n != 0) n = -n;
+    *out = make_int(n);
+    return true;
+}
+
+// write と同じ関数で書く（書式を2つ持たない。18日目の決定90）。
+// 基数 10 と引数1個はここ。2、8、16 は正確な整数だけ（§4.7）。
+static ValuePtr prim_number_to_string(ValuePtr* a, std::size_t n) {
+    need_args("number->string", n, 1, 2);
+    if (!is_number(a[0])) prim_type_error("number->string", "a number", a[0]);
+    if (n == 1 || radix_of(a[1], "number->string") == 10)
+        return make_string(to_string(a[0]));
+    if (!is_exact_int(a[0]))
+        prim_type_error("number->string", "an exact integer", a[0]);
+    return make_string(exact_int_to_radix(a[0], radix_of(a[1], "number->string")));
+}
+// リーダと同じ判定を使う（数の文法を2つ持たない。決定89）。
+// 基数 10 と引数1個は parse_number。2、8、16 はこの手続きの中だけ。
 static ValuePtr prim_string_to_number(ValuePtr* a, std::size_t n) {
-    need_args("string->number", n, 1, 1);
+    need_args("string->number", n, 1, 2);
+    std::string_view s = view_of(str_of(a[0], "string->number"));
+    if (n == 1 || radix_of(a[1], "string->number") == 10) {
+        ValuePtr num = nullptr;
+        if (!parse_number(s, &num)) return g_false;
+        return num;
+    }
     ValuePtr num = nullptr;
-    if (!parse_number(view_of(str_of(a[0], "string->number")), &num)) return g_false;
+    if (!exact_int_from_radix(s, radix_of(a[1], "string->number"), &num)) return g_false;
     return num;
 }
 
@@ -5822,6 +5891,82 @@ static void selftest_scheme_eval() {
              eval_error_body("(system \"scheme14-no-such-program\")"),
              "system: cannot run program\n  given: scheme14-no-such-program");
 #endif
+
+    check_eq("number->string decimal",
+             eval_to_string("(number->string 255)"), "\"255\"");
+    check_eq("number->string radix 10",
+             eval_to_string("(number->string 1.5 10)"), "\"1.5\"");
+    check_eq("string->number radix 10",
+             eval_to_string("(string->number \"1.5\" 10)"), "1.5");
+    check_eq("number->string hex",
+             eval_to_string("(number->string 255 16)"), "\"ff\"");
+    check_eq("number->string oct",
+             eval_to_string("(number->string 255 8)"), "\"377\"");
+    check_eq("number->string bin",
+             eval_to_string("(number->string 255 2)"), "\"11111111\"");
+    check_eq("number->string negative hex",
+             eval_to_string("(number->string -255 16)"), "\"-ff\"");
+    check_eq("number->string zero bin",
+             eval_to_string("(number->string 0 2)"), "\"0\"");
+    check_eq("string->number hex upper",
+             eval_to_string("(string->number \"FF\" 16)"), "255");
+    check_eq("string->number hex sign",
+             eval_to_string("(string->number \"+10\" 16)"), "16");
+    check_eq("string->number negative zero",
+             eval_to_string("(string->number \"-0\" 16)"), "0");
+    check_eq("string->number leading zeros",
+             eval_to_string("(string->number \"00ff\" 16)"), "255");
+    check_eq("string->number bad digit",
+             eval_to_string("(string->number \"ff\" 2)"), "FALSE");
+    check_eq("string->number fraction in hex",
+             eval_to_string("(string->number \"1.5\" 16)"), "FALSE");
+    check_eq("string->number hash prefix",
+             eval_to_string("(string->number \"#xff\" 16)"), "FALSE");
+    check_eq("string->number empty",
+             eval_to_string("(string->number \"\" 16)"), "FALSE");
+    check_eq("string->number sign only",
+             eval_to_string("(string->number \"+\" 16)"), "FALSE");
+    check_eq("number->string bignum hex",
+             eval_to_string("(number->string"
+                            " (string->number \"1267650600228229401496703205376\") 16)"),
+             "\"10000000000000000000000000\"");
+    check_eq("radix round trip",
+             eval_to_string("(eqv? (string->number \"1267650600228229401496703205376\")"
+                            " (string->number"
+                            "  (number->string"
+                            "   (string->number \"1267650600228229401496703205376\") 16)"
+                            "  16))"),
+             "TRUE");
+    check_eq("reader ignores hex prefix", read_one_to_string("#xff"), "#xff");
+    check_eq("reader ignores bin prefix", read_one_to_string("#b101"), "#b101");
+    check_eq("number->string arity",
+             eval_error_body("(number->string)"),
+             "number->string: wrong number of arguments\n"
+             "  expected: 1 to 2 arguments\n  given: 0");
+    check_eq("number->string not a number",
+             eval_error_body("(number->string \"ff\" 16)"),
+             "number->string: wrong type of argument\n"
+             "  expected: a number\n  given: \"ff\"");
+    check_eq("string->number not a string",
+             eval_error_body("(string->number 255 16)"),
+             "string->number: wrong type of argument\n"
+             "  expected: a string\n  given: 255");
+    check_eq("radix not an integer",
+             eval_error_body("(number->string 255 16.0)"),
+             "number->string: wrong type of argument\n"
+             "  expected: an integer\n  given: 16.0");
+    check_eq("radix out of range",
+             eval_error_body("(number->string 255 3)"),
+             "number->string: argument out of range\n"
+             "  expected: 2, 8, 10, or 16\n  given: 3");
+    check_eq("hex of an inexact",
+             eval_error_body("(number->string 1.5 16)"),
+             "number->string: wrong type of argument\n"
+             "  expected: an exact integer\n  given: 1.5");
+    check_eq("bin of an integer flonum",
+             eval_error_body("(number->string 8.0 2)"),
+             "number->string: wrong type of argument\n"
+             "  expected: an exact integer\n  given: 8.0");
 }
 
 // --- REPL ------------------------------------------------------------------
