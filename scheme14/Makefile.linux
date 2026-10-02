@@ -1,0 +1,72 @@
+# scheme14 — Linux でのビルド。
+#
+#     make -C scheme14
+#     make -C scheme14 -f Makefile.linux
+#
+# 上の1行目は、Linux では scheme14/Makefile がこのファイルを読む。
+# Windows（w64devkit）の make は scheme14/Makefile のほうを使い、
+# 実行ファイルは scheme14.exe になる。こちらが作るのは scheme14。
+#
+# ツールチェインは scheme13/Makefile およびルートの Makefile.linux と同じ:
+#   clang++、/usr/local にあればそちらの Boehm GC、無ければ
+#   ディストリビューションの libgc。Boost はヘッダのみ（/usr/include）。
+
+HERE := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+ROOT := $(patsubst %/,%,$(dir $(HERE)))
+
+CXX      = clang++
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Wno-unused-function
+
+# /usr/local に GC が無い環境（この WSL など）では、コンパイラの
+# 既定の探索でディストリビューションの libgc に当たる。
+GC_INCLUDE    = -I/usr/local/include
+BOOST_INCLUDE = -I/usr/include
+GC_LIB        = -L/usr/local/lib -lgc -lgccpp
+
+TARGET = $(HERE)/scheme14
+SOURCE = $(HERE)/scheme14.cpp
+
+.PHONY: all clean selftest compare test sicp bench help
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE)
+	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $@ $< $(GC_LIB)
+
+# 凍結仕様（dev_memo.md §2）との突き合わせ。エラー本文と位置もここで見る。
+selftest: $(TARGET)
+	@$(TARGET) --selftest
+
+# 構文展開が scheme12 と等価かを突き合わせる。scheme12_debug のビルドが要る
+# （リポジトリのルートで make -f Makefile.linux scheme12）。
+compare: $(TARGET)
+	@cd $(ROOT) && $(HERE)/tests/compare_expand.sh $(TARGET)
+
+# 既存 .scm 資産との互換性回帰（受け入れ基準そのもの）。
+test: $(TARGET)
+	@cd $(ROOT) && $(HERE)/tests/run_golden.sh $(TARGET)
+
+sicp: $(TARGET)
+	@cd $(ROOT) && $(HERE)/sicp/run_sicp.sh $(TARGET)
+
+# 呼び出し性能のベンチ。time は bash の組み込みなので、/bin/sh が dash の
+# 環境でも動くようシェルを明示する（scheme13/Makefile と同じ）。
+bench: SHELL := /bin/bash
+bench: $(TARGET)
+	@cd $(ROOT) && printf '(define (loop i acc) (if (= i 0) acc (loop (- i 1) (+ acc 1))))\n(display (loop 1000000 0))\n(newline)\n' > $(HERE)/.bench.scm
+	@cd $(ROOT) && time $(TARGET) --load $(HERE)/.bench.scm
+	@rm -f $(HERE)/.bench.scm
+
+clean:
+	rm -f $(TARGET) $(HERE)/.bench.scm
+
+help:
+	@echo "scheme14 targets (Linux):"
+	@echo "  all      - ビルド（scheme14）"
+	@echo "  selftest - 凍結仕様との突き合わせ（C++ 単体の回帰）"
+	@echo "  compare  - 構文展開が scheme12 と等価かを突き合わせる"
+	@echo "  test     - 互換性回帰 + エラーの包み + REPL の筋道（受け入れ基準）"
+	@echo "  sicp     - SICP を教材にした回帰"
+	@echo "  bench    - 呼び出し性能のベンチ"
+	@echo "  clean    - 生成物を削除"
+	@echo "Windows では scheme14/Makefile が scheme14.exe を作る。"

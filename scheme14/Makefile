@@ -9,9 +9,16 @@
 # GC のランタイム DLL は実行ファイルの隣に置く。ローダは .exe の隣を
 # 最初に見る（決定162）。ルートには置かない。ルートのコピーは
 # scheme12 / scheme13 用である。
+#
+# Linux ではこのファイルの中身は使わず、Makefile.linux を読む。
+# 実行ファイルは scheme14（拡張子なし）になる。
 
 HERE := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 ROOT := $(patsubst %/,%,$(dir $(HERE)))
+
+ifneq ($(OS),Windows_NT)
+include $(HERE)/Makefile.linux
+else
 
 CXX      = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Wno-unused-function
@@ -69,3 +76,5 @@ help:
 	@echo "  sicp     - SICP を教材にした回帰"
 	@echo "  bench    - 呼び出し性能のベンチ"
 	@echo "  clean    - 生成物を削除"
+
+endif

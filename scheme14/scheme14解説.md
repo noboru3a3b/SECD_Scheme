@@ -144,6 +144,8 @@ scheme14/scheme14.exe --load scheme14/tests/system_win_test.scm
 
 2026-10-02 に、この Windows でそのスクリプトが通った。子の表示（`type` や `copy` のメッセージ）は端末へ出る。スクリプト自身の結果は `*** ALL SYSTEM CHECKS PASSED ***` である。`cmd.exe` は引用符の外にある `/` をスイッチとして読むので、このスクリプトはコマンドへ渡す経路の区切りを `\` にしている。
 
+2026-10-03 に、この Linux で §2.7 の式を実行し、通った。実行ファイルは `make -C scheme14` が作る `scheme14/scheme14` である。子の表示は端末へ出る。
+
 原典の `system` は、プログラム名と引数のリストを Common Lisp の `run-program` に渡していた。呼び出しの形は `(system prog arg1 (list ...))` で、引数を一つと、残りのリストとに分けていた。これは `run-program` がリストを要求していたことの写しなので、Scheme では残りの引数をそのまま並べる。
 
 ```
@@ -313,43 +315,56 @@ POSIX でプロセスがシグナルで終わったときは、`128` にその�
 
 ### 2.7 Linux と Unix で使う
 
-呼び出しの形は §2.5 と同じで、起動するのはその OS のプログラムである。この節の式は POSIX 側の処理に合わせた使い方であり、この Windows ではその分岐がコンパイルされない。実行した結果は書いていない。
+呼び出しの形は §2.5 と同じで、起動するのはその OS のプログラムである。この節の式は POSIX 側の処理に合わせた使い方であり、この Windows ではその分岐がコンパイルされない。2026-10-03 に、この Linux でこの節の式を実行し、下の結果になった。子の表示（`ls` や `cat` や `grep` の出力）は端末へ出る。`system` の値は終了コードだけである。
 
 `ls`、`mkdir`、`cp`、`mv`、`rm`、`cat`、`grep` は実行ファイルなので、第1引数にその名前を書く。PATH から探す。`/bin/ls` のように区切りを含む名前は、そのパスをそのまま使う。
+
+ディレクトリを作り、ファイルを書き、読み戻す。書き込みは `sh` の文法なので、スクリプト全体を `"-c"` の次の1文字列にする。
 
 ```
 (system "mkdir" "work")
 (system "mkdir" "work/sub")
 (system "mkdir" "work/my files")
-(system "ls" "-l" "work")
+(system "sh" "-c" "echo hello from system > work/note.txt")
+(read1 "work/note.txt")                                          ; => "hello from system"
+(system "ls" "-l" "work")                                        ; 端末に一覧が出て、値は 0
+(system "cat" "work/note.txt")                                   ; 端末に中身が出て、値は 0
+(system "grep" "hello from" "work/note.txt")                     ; 見つかれば 0
+```
+
+`grep` の第2引数は空白を含む1個の検索文字列である。この実行では、その行が端末に出て、値は 0 だった。
+
+作業ディレクトリの移動は子の中だけである。`cd` と `&&` も `sh` の文法なので、同じように1文字列にする。`cd` のあとの `>` は移動先から見たパスなので、一つ上へ書く。
+
+```
+(system "sh" "-c" "cd work/sub && pwd > ../cwd.txt")
+(read1 "work/cwd.txt")                                           ; 行末は "/sub"
+```
+
+`../cwd.txt` は、`cd` したあとの `work/sub` から見て一つ上である。できたファイルは `work/cwd.txt` で、中身はその移動先の絶対パスになる。§2.5 の `read1` で読む。
+
+コピー、移動、削除。
+
+```
 (system "cp" "work/note.txt" "work/note-copy.txt")
 (system "mv" "work/note-copy.txt" "work/sub/moved.txt")
+(read1 "work/sub/moved.txt")                                     ; => "hello from system"
 (system "rm" "work/note.txt")
-(system "cat" "work/note.txt")
-(system "grep" "hello from" "work/note.txt")
 ```
-
-`grep` の第2引数は空白を含む1個の検索文字列である。
-
-ファイルへの書き込み、`cd`、`&&` は `sh` の文法なので、スクリプト全体を `"-c"` の次の1文字列にする。
-
-```
-(system "sh" "-c" "echo hello from system > work/note.txt")
-(system "sh" "-c" "cd work/sub && pwd > ../cwd.txt")
-```
-
-2行目の `../cwd.txt` は、`cd` したあとの `work/sub` から見て一つ上である。できたファイルは `work/cwd.txt` で、中身はその移動先の絶対パスになる。§2.5 の `read1` で読む。
 
 `sh` はスクリプトの中の引用符を自分で読む。空白のあるパスへ書くときは、その引用符をスクリプトの1文字列の中に置く。
 
 ```
 (system "sh" "-c" "echo spaced > 'work/my files/inside.txt'")
+(read1 "work/my files/inside.txt")                               ; => "spaced"
 ```
 
-終了コードは整数である。`true` は 0、`sh -c` に渡した `exit` の値がそのまま戻る。プログラム名が見つからないときは `system: cannot run program` で、終了コードは返らない。シグナルで終わったプロセスは、`128` にそのシグナル番号を足した値を返す。
+終了コードは整数である。`true` は 0、`sh -c` に渡した `exit` の値がそのまま戻る。プログラム名が見つからないときは `system: cannot run program` で、終了コードは返らない。シグナルで終わったプロセスは、`128` にそのシグナル番号を足した値を返す。`SIGTERM` の番号は 15 なので、この実行では 143 だった。起動できたあとにコマンドが失敗したときは、0 以外の整数が返る。この Linux の `ls` は、無いパスに対して 2 を返した。
 
 ```
 (system "true")                                                  ; => 0
 (system "sh" "-c" "exit 7")                                      ; => 7
+(system "sh" "-c" "kill -TERM $$")                               ; => 143
 (system "scheme14-no-such-program")                              ; system: cannot run program
+(system "ls" "no-such-dir")                                      ; => 2
 ```
