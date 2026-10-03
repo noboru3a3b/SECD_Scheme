@@ -278,7 +278,7 @@ scheme12 では以下のバグが実際に起きた。同じ轍を踏まない�
 - `#t` / `#f` と `true` / `false` / `nil` のリテラルを両方受け付ける
 - `,@` は内部的に `splice` というシンボルに読まれる
   （`unquote-splicing` ではない）
-- 準クオートのネスト（`` `(a `(b ,,x)) ``）は未対応。scheme13 でも対応しない
+- 準クオートはネストする。カンマは同じ深さのバッククオートだけを打ち消す。`(let ((x 'foo)) `(a `(b ,,x)))` は `(a (quasiquote (b (unquote foo))))`。表示は略記にしない
 - `define-macro` によるマクロのみ。`syntax-rules` はない
 - 実数のリテラル（18日目に追加。決定89）。**トークン全体が形に一致したときだけ数**で、
   外れたものは今までどおりシンボルになる
@@ -683,6 +683,56 @@ R5RS が許す第2引数のうち、**正確な整数を 2、8、16 で読み書
 
 実装するときは `--selftest` に、上の往復、大文字の入力、形が外れたときの `false`、基数と型のエラーを足す。ゴールデンには入れない。§2 の凍結した表示は変えない。
 
+### 4.8 準クオートのネスト（2026-10-04 に設計し、同日実装）
+
+R5RS 4.2.6 のネストは、`qq_transfer` の深さで入っている。リーダ、命令、コンパイラの他の特殊形式は変えていない。バッククオート、カンマ、カンマアットは `quasiquote`、`unquote`、`splice` として読まれる。
+
+**深さはテンプレートを1段入るたびに数える。** 外側の `quasiquote` を剥がした直後が深さ 1 である。`expand_form_1` が渡す。`quasiquote` を見たら 1 増やし、`unquote` と `splice` を見たら 1 減らす。深さが 1 の `unquote` と `splice` だけが「ここで評価する」である。それより深いものは、評価せずに同じシンボルのリストとして結果に残す。
+
+リストの car がシンボル `quasiquote`、`unquote`、`splice` のいずれかなら、そのリストはその構文である。要素として現れたときも、cdr を辿った残りがそのリストそのものであるときも、同じ規則で見る。`(a . ,v)` と `(a unquote v)` は同じリストなので、今どおり後者もドット位置の unquote である。
+
+構文として見たリストは、引数がちょうど 1 個の適正なリストである。0 個、2 個以上、ドットで終わっているものは `bad syntax in quasiquote`。`expected:` は `(quasiquote expression)`、`(unquote expression)`、`(splice expression)` のどれかで、`given:` はそのリストである。実装前の深さ 1 は `(unquote a b)` の余分な引数を捨てて `a` だけを採っていた。この抜けは、同じ検査で閉じた。
+
+展開は今の `cons` と `append` と `(quote ...)` のままである。空リストは `(quote NIL)`。数も文字列も quote する。`(quote a)` と `(quote b)` を `(quote (a b))` に畳まない。畳むと、ネストを含まない既存の展開文字列が変わる。
+
+- **ベクタ**は、要素を同じ深さでリストとして展開し、`list->vector` で戻す。
+- **上の 3 シンボル以外のアトム**は `(quote それ)`。
+- **`quasiquote`** は、中のテンプレートを深さ +1 で展開し、`(cons (quote quasiquote) (cons その展開 (quote NIL)))` で包む。
+- **`unquote`** は、深さ 1 なら式をそのまま置く。その式の中へは降りない。深さ 2 以上なら、式を深さ −1 で展開し、`unquote` を同じ cons の形で包む。
+- **`splice`** は、深さ 1 なら式をそのまま置き、今どおり `append` の引数にする。深さ 2 以上では `append` にしない。`splice` を包んだものを、普通の要素として `cons` する。
+- **それ以外のペア**は、car を同じ深さで展開して `cons` し、cdr は今どおりループで辿る。cdr 方向には再帰しない（§4.3）。深さを下げる再帰は、バッククオートの入れ子とリストの car だけに乗る。
+
+深さ 1 で、`splice` がリストの要素でもベクタの要素でもない位置にあるときは、引数が 1 個でも今のエラーのまま止める。`note` の文は変えない。`unquote-splicing (,@) is not allowed in the tail position of a dotted list`。トップレベルの `,@x` もこの位置である。深さ 2 以上の同じ位置はエラーにしない。`` `(a `(b . ,@x)) `` は、内側をデータ `(b splice x)` として残す。
+
+`quote` はカンマを止めない。R5RS の `` ,',name `` は、引用の中のカンマも深さだけで決まる。有効な `unquote` の式はテンプレートではないので、その中のカンマはここでは見ない。`` `,,x `` は式 `(unquote x)` をそのまま置く。展開時にはエラーにしない。式の中に別の `quasiquote` があるとき、たとえば `` `(,(list `(b ,y))) `` の内側は、`list` の引数としてコンパイラが後から普通の準クオート（深さ 1）として展開する。ここで先に展開すると、二度展開するか、データとして残すべきバッククオートまで消える。
+
+リーダは変えない。手書きの `(unquote-splicing x)` は `splice` と認めない。`unquote-splicing` を別名で足さない。結果の表示も略記に戻さない。`(quasiquote (b (unquote foo)))` のまま書く。§2.1 の表示は変えない。
+
+ネストを含まないテンプレートの展開文字列は、今の `--selftest` の 4 件と一致したままにする。`` `(a ,x) ``、`` `(,k . ,v) ``、`` `(a ,@b c) ``、`` `#(1 ,x) ``。
+
+`--selftest` にあるのは次である。ゴールデンの既存 12 件には、バッククオートのネストは無い。`spec_test.scm` の §2.5 は採り直してある。
+
+- `` `(a `(b ,x)) `` の値は `(a (quasiquote (b (unquote x))))` である。内側のカンマが 1 つのときは、変数 `x` を評価しない。シンボル `x` がデータのまま残る。
+- `` `(a `(b ,,x)) `` の展開は `(cons (quote a) (cons (cons (quote quasiquote) (cons (cons (quote b) (cons (cons (quote unquote) (cons x (quote NIL))) (quote NIL))) (quote NIL))) (quote NIL)))`。こちらは `x` を評価する。
+- `` `(a `(b ,@,xs)) `` の内側は `append` ではない。`(cons (quote splice) (cons xs (quote NIL)))` を `cons` する。
+- `(let ((name1 'x) (name2 'y)) `(a `(b ,,name1 ,',name2 d) e))` の値は `(a (quasiquote (b (unquote x) (unquote (quote y)) d)) e)`。
+- `(let ((x 'foo)) ``,,x)` の値は `(quasiquote (unquote foo))`。カンマが 1 つ多い `` `,,x `` は展開でき、値は実行時に `unquote` を評価した結果である。
+- `` `(a . ,@v) `` は今の `note` のまま。`(quasiquote (unquote a b))` は `expected: (unquote expression)`。
+
+§2.5 の該当行は次である。`spec_test.scm` は 2.5-04 にこの行があり、実数のリテラル以降は 2.5-09 まで繰り下がっている。ファイル先頭の「無い、という主張」にネストの句は無い。`syntax-rules` の句は残してある。
+
+- 準クオートはネストする。カンマは同じ深さのバッククオートだけを打ち消す。`(let ((x 'foo)) `(a `(b ,,x)))` は `(a (quasiquote (b (unquote foo))))`。表示は略記にしない。
+
+`scheme13解説.md` の本文は動かさない。あちらの「ネストは未対応」は scheme13 の説明である。scheme14 の説明は `scheme14解説.md` に書く。
+
+却下した案は次である。
+
+- 内側の準クオートも展開しきって、残りのカンマをデータとして後から組み立てる。深さの帳尻を二箇所で持つことになる。
+- 有効な `unquote` の式の中まで歩く。`` `,,x `` の余ったカンマまで外側が食べる。
+- 隣り合う `(quote a)` と `(quote b)` を `(quote (a b))` に畳む。深さ 1 の展開が変わる。
+- `unquote-splicing` も `splice` と同じに認める。リーダが作る名前は `splice` だけである。
+- 循環リストの準クオートを検出する。今も検出していない。この節では足さない。
+
 ---
 
 ## 5. 受け入れ基準
@@ -841,6 +891,7 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - **`eval` は §4.5。** フレームを値にしない。式は呼び出した VM で走らせ、`STOP` も別 VM も使わない。空の環境は特殊形式の写しと `:undef`。未束縛参照のセルは対話環境の表にだけ足す。
 - **`system` は §4.6。** プログラム名と引数の列を渡し、終了コードを返す。OS の分岐はこの手続きの中だけ。シェルの文字列にはしない。子の出力は OS の標準ストリームで、`current-output-port` には従わない。
 - **`number->string` と `string->number` の基数は §4.7。** 2、8、16 は正確な整数だけ。引数1個と基数 10 は今の10進のまま。リーダに `#x` は足さない。
+- **準クオートのネストは §4.8。** 深さは `qq_transfer` の引数。深さ 1 の `cons` / `append` / `quote` の形は変えない。リーダは変えない。`unquote-splicing` は別名にしない。
 - **scheme13 の成果は引き継ぐ。** 設計の統一、SICP の動作確認、浮動小数点数は土台である。メモを短くしたのは継続のためで、これらを外すためではない。引き継ぎに使うメモは `scheme14/dev_memo.md`。`scheme13/dev_memo.md` は保存版。
 - **`scheme13/` は保存する。** scheme14 の作業でそこを直さない。scheme12 も消さない。`scheme12_debug解説.md` も消さない（決定44・157）。
 - **ルートの Makefile 4本は写しである。** 1本直したら4本直す。ルートから `make -C scheme13` へ委譲しない（決定158）。`scheme14/Makefile` はあの4本とは別で、Windows ではこのファイル自身が `scheme14.exe` を作る。Linux では同じ `make -C scheme14` が `Makefile.linux` を読み、実行ファイルは `scheme14` になる。ルートで `make` すると scheme13 がビルドされる。scheme14 を測るときは `make -C scheme14`。
@@ -868,6 +919,7 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - `scheme13解説.md` は scheme13 時点の説明である。scheme14 で足した機能の解説は `scheme14解説.md`。振る舞いを変えたら、変わった側の文書を追随する。ずれやすいのは命令一覧、プリミティブの数、テストの件数、互換性、R5RS の不足。正本は §2 とこの §7。
 - `system` は 2026-10-02 に §4.6 で入れた。呼び出しは `(system program arg ...)`。
 - `number->string` と `string->number` は、2026-10-03 に §4.7 の第2引数を受け付ける。2、8、16 は正確な整数だけである。
+- 準クオートはネストする（§4.8。2026-10-04）。カンマは同じ深さのバッククオートだけを打ち消す。表示は `(quasiquote ...)` のままである。`--selftest` は 379 checks, 0 failed。`compare` は 15 passed、`test` は 42 passed。
 
 2026-10-01 に、この Windows で走らせた結果:
 
@@ -945,6 +997,6 @@ scheme14/scheme14.exe --load scheme14/tests/system_win_test.scm
   読解メモ: [`micro_scheme8_notes.md`](micro_scheme8_notes.md)
   実行: `sbcl --script micro_Scheme8.lisp`（リポジトリのルートで。`quit` で終了）
 - scheme12 で直した不具合の経緯: `git log` の `4bf8ed6`〜`05f7cf8`
-- scheme14 で足した機能: [`scheme14解説.md`](scheme14解説.md)（`eval` と `system` と、数と文字列の基数）
+- scheme14 で足した機能: [`scheme14解説.md`](scheme14解説.md)（`eval` と `system` と、数と文字列の基数と、準クオートのネスト）
 - 決定の全文: [`log/decisions.md`](log/decisions.md)（**現行の作業指示ではない。**）
 - 利用者の作業指示の控え: `scheme13開発.txt`（**現行の仕様ではない。** 決定165）

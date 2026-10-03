@@ -1649,16 +1649,69 @@ static ValuePtr expand_do(ValuePtr form) {
                                   list_from(call)}), form);
 }
 
-// 準クオートの展開。cdr 方向は再帰せず、要素を前から集めて後ろから組み立てる（§4.3）。
-// 準クオートのネストには対応しない（§2.5 の凍結仕様）。
-static ValuePtr qq_transfer(ValuePtr x) {
+// 準クオートの展開（§4.8）。cdr 方向は再帰せず、要素を前から集めて後ろから組み立てる（§4.3）。
+// 深さ 1 が外側。quasiquote で 1 増え、unquote と splice で 1 減る。
+// 深さ 1 の unquote / splice だけが式を置く。それより深いものはデータとして残す。
+enum class QqKind { Quasiquote, Unquote, Splice };
+
+static const char* qq_expect(QqKind kind) {
+    switch (kind) {
+        case QqKind::Quasiquote: return "(quasiquote expression)";
+        case QqKind::Unquote:    return "(unquote expression)";
+        case QqKind::Splice:     return "(splice expression)";
+    }
+    return "";
+}
+
+static bool qq_kind_of(ValuePtr head, QqKind& kind) {
+    if (is_symbol_named(head, "quasiquote")) { kind = QqKind::Quasiquote; return true; }
+    if (is_symbol_named(head, "unquote"))    { kind = QqKind::Unquote;    return true; }
+    if (is_symbol_named(head, "splice"))     { kind = QqKind::Splice;     return true; }
+    return false;
+}
+
+// car が3シンボルのどれかなら、そのリストは構文である。引数はちょうど1個。
+// 構文でなければ false。個数が違えばここで止まる。
+static bool qq_take_form(ValuePtr cur, QqKind& kind, ValuePtr& arg) {
+    if (!is_pair(cur) || !qq_kind_of(car(cur), kind)) return false;
+    ValuePtr rest = cdr(cur);
+    if (!is_pair(rest) || !is_nil(cdr(rest)))
+        error_at(nearest_pos(cur), "bad syntax in quasiquote" +
+                                   expected_given(qq_expect(kind), to_string(cur)));
+    arg = car(rest);
+    return true;
+}
+
+static ValuePtr qq_quote_of(ValuePtr x) {
+    return list_from({make_symbol("quote"), x});
+}
+
+// (cons (quote name) (cons expanded (quote NIL)))。深い位置にシンボルを残す形。
+static ValuePtr qq_wrap(const char* name, ValuePtr expanded) {
+    return list_from({make_symbol("cons"),
+                      qq_quote_of(make_symbol(name)),
+                      list_from({make_symbol("cons"), expanded, qq_quote_of(g_nil)})});
+}
+
+static ValuePtr qq_transfer(ValuePtr x, int depth);
+
+// 認識済みの構文を、深さに応じた式へ。splice の深さ1は呼び出し側が append にする。
+static ValuePtr qq_form_code(QqKind kind, ValuePtr arg, int depth) {
+    if (kind == QqKind::Quasiquote)
+        return qq_wrap("quasiquote", qq_transfer(arg, depth + 1));
+    if (depth == 1) return arg;   // 有効な unquote。式の中へは降りない
+    const char* name = kind == QqKind::Unquote ? "unquote" : "splice";
+    return qq_wrap(name, qq_transfer(arg, depth - 1));
+}
+
+static ValuePtr qq_transfer(ValuePtr x, int depth) {
     if (!is_pair(x)) {
         // ベクタリテラル内の unquote。要素をリストに直して変換し、list->vector で戻す。
-        // これがないと `#(1 ,x) が #(1 (unquote x)) になる。
+        // これがないと `#(1 ,x) が #(1 (unquote x)) になる。深さは要素へ渡す。
         if (is_vector(x))
             return list_from({make_symbol("list->vector"),
-                              qq_transfer(list_from(as_vector(x)->elems))});
-        return list_from({make_symbol("quote"), x});
+                              qq_transfer(list_from(as_vector(x)->elems), depth)});
+        return qq_quote_of(x);
     }
 
     struct Step { bool splice; ValuePtr expr; };
@@ -1667,38 +1720,38 @@ static ValuePtr qq_transfer(ValuePtr x) {
     ValuePtr cur  = x;
 
     while (is_pair(cur)) {
-        ValuePtr a = as_pair(cur)->car;
-        // ドット位置の unquote。`(a . ,v) はリーダで (a unquote v) と読まれるため、
-        // cdr へ降りた先で cur 自身が (unquote v) になる。ここで拾わないと
-        // unquote がただのシンボルとして素通りし、(a unquote v) という3要素の
-        // リストが黙って出来てしまう。R5RS では `(unquote v) と ,v は等価。
-        if (is_symbol_named(a, "unquote")) {
-            if (!is_pair(as_pair(cur)->cdr))
-                error_at(nearest_pos(cur), "bad syntax in quasiquote" +
-                                           expected_given("(unquote expression)",
-                                                          to_string(cur)));
-            tail = car(as_pair(cur)->cdr);
+        QqKind kind;
+        ValuePtr arg;
+        // 残りのリスト自身が構文。(a . ,v) は (a unquote v) と読まれるので、
+        // cdr へ降りた cur が (unquote v) になる。要素として扱うと unquote が
+        // シンボルのまま残る。R5RS では (unquote v) と ,v は等価。
+        if (qq_take_form(cur, kind, arg)) {
+            if (kind == QqKind::Splice && depth == 1)
+                error_at(nearest_pos(cur),
+                         "bad syntax in quasiquote" +
+                         detail("note", "unquote-splicing (,@) is not allowed in the tail "
+                                        "position of a dotted list"));
+            tail = qq_form_code(kind, arg, depth);
             break;
         }
-        // `(a . ,@v) は R5RS で不正。黙って壊れた結果を返さずに知らせる。
-        if (is_symbol_named(a, "splice"))
-            error_at(nearest_pos(cur),
-                     "bad syntax in quasiquote" +
-                     detail("note", "unquote-splicing (,@) is not allowed in the tail "
-                                    "position of a dotted list"));
 
-        if (is_pair(a) && is_symbol_named(car(a), "unquote"))
-            steps.push_back(Step{false, car(cdr(a))});
-        else if (is_pair(a) && is_symbol_named(car(a), "splice"))
-            steps.push_back(Step{true, car(cdr(a))});
-        else if (is_pair(a))
-            steps.push_back(Step{false, qq_transfer(a)});   // car 方向の再帰は可
-        else
-            steps.push_back(Step{false, list_from({make_symbol("quote"), a})});
+        ValuePtr a = car(cur);
+        if (qq_take_form(a, kind, arg)) {
+            // 要素位置の splice だけが、深さ1で append になる。
+            // 深い splice は splice というリストを cons する。
+            if (kind == QqKind::Splice && depth == 1)
+                steps.push_back(Step{true, arg});
+            else
+                steps.push_back(Step{false, qq_form_code(kind, arg, depth)});
+        } else if (is_pair(a)) {
+            steps.push_back(Step{false, qq_transfer(a, depth)});   // car 方向の再帰は可
+        } else {
+            steps.push_back(Step{false, qq_quote_of(a)});
+        }
 
-        cur = as_pair(cur)->cdr;
+        cur = cdr(cur);
     }
-    if (!tail) tail = qq_transfer(cur);
+    if (!tail) tail = qq_transfer(cur, depth);
 
     ValuePtr out = tail;
     for (std::size_t i = steps.size(); i > 0; --i) {
@@ -1769,7 +1822,7 @@ static ValuePtr expand_form_1(ValuePtr form) {
     if (name == "do")      return expand_do(form);
     if (name == "quasiquote") {
         check_arity("quasiquote", form, cdr(form), 1, 1);
-        return with_pos_of(qq_transfer(car(cdr(form))), form);
+        return with_pos_of(qq_transfer(car(cdr(form)), 1), form);
     }
     return form;
 }
@@ -5043,6 +5096,20 @@ static void selftest_expand() {
     check_eq("qq vector",
              expand_one("`#(1 ,x)"),
              "(list->vector (cons (quote 1) (cons x (quote NIL))))");
+    // ネスト（§4.8）。深さ1の4件は上の文字列のまま。値の検査は selftest_eval。
+    check_eq("qq nest two commas",
+             expand_one("`(a `(b ,,x))"),
+             "(cons (quote a) (cons (cons (quote quasiquote) (cons (cons (quote b) "
+             "(cons (cons (quote unquote) (cons x (quote NIL))) (quote NIL))) "
+             "(quote NIL))) (quote NIL)))");
+    check_eq("qq nest splice stays",
+             expand_one("`(a `(b ,@,xs))"),
+             "(cons (quote a) (cons (cons (quote quasiquote) (cons (cons (quote b) "
+             "(cons (cons (quote splice) (cons xs (quote NIL))) (quote NIL))) "
+             "(quote NIL))) (quote NIL)))");
+    check_eq("qq extra comma expands",
+             expand_one("`,,x"),
+             "(unquote x)");
 
     // 本体先頭の define だけが letrec へ移る（§2.6）
     {
@@ -5487,6 +5554,32 @@ static void selftest_macroexpand() {
 }
 
 static void selftest_eval() {
+    // 準クオートのネスト（§4.8）。展開の文字列は selftest_expand。
+    check_eq("qq nest one comma",
+             eval_to_string("`(a `(b ,x))"),
+             "(a (quasiquote (b (unquote x))))");
+    check_eq("qq nest r5rs",
+             eval_to_string("(let ((name1 'x) (name2 'y)) "
+                            "`(a `(b ,,name1 ,',name2 d) e))"),
+             "(a (quasiquote (b (unquote x) (unquote (quote y)) d)) e)");
+    check_eq("qq nest two two",
+             eval_to_string("(let ((x 'foo)) ``,,x)"),
+             "(quasiquote (unquote foo))");
+    check_eq("qq extra comma runs",
+             eval_error_body("(let ((x 'foo)) `,,x)"),
+             "unbound variable: unquote\n"
+             "  note: it is referenced here but never defined by define or set!");
+    check_eq("qq dotted splice",
+             eval_error_body("`(a . ,@v)"),
+             "bad syntax in quasiquote\n"
+             "  note: unquote-splicing (,@) is not allowed in the tail "
+             "position of a dotted list");
+    check_eq("qq unquote arity",
+             eval_error_body("(quasiquote (unquote a b))"),
+             "bad syntax in quasiquote\n"
+             "  expected: (unquote expression)\n"
+             "  given: (unquote a b)");
+
     check_eq("arith",      eval_to_string("(+ 1 2 3)"),           "6");
     check_eq("nested",     eval_to_string("(* (+ 1 2) (- 10 4))"), "18");
     check_eq("bignum",     eval_to_string("(* 99999999999 99999999999)"),

@@ -3,7 +3,7 @@
 scheme13 のあと、scheme14 で新たに加わった機能の解説。
 土台の処理系そのものは [`scheme13解説.md`](scheme13解説.md) にある。ここには差分だけを書く。
 
-対象は `scheme14/scheme14.cpp`。`eval` と `system` と、`number->string` / `string->number` の基数は、このファイルに入っている。
+対象は `scheme14/scheme14.cpp`。`eval` と `system` と、`number->string` / `string->number` の基数と、準クオートのネストは、このファイルに入っている。
 
 ---
 
@@ -16,7 +16,7 @@ scheme13 のあと、scheme14 で新たに加わった機能の解説。
 | `dev_memo.md` | **なぜそう決めたか。** 設計憲章、凍結仕様、アーキテクチャ | 次に手を入れる人 |
 | `micro_scheme8_notes.md` | 原典 `micro_Scheme8.lisp` の読解 | 由来を知りたい人 |
 
-判断の根拠は `dev_memo.md` にある。`eval` は §4.5、`system` は §4.6、基数は §4.7。経緯は `log/decisions.md` の末尾「続報」。
+判断の根拠は `dev_memo.md` にある。`eval` は §4.5、`system` は §4.6、基数は §4.7、準クオートのネストは §4.8。経緯は `log/decisions.md` の末尾「続報」。
 
 振る舞いを変えたら、この文書も直す。
 
@@ -488,3 +488,35 @@ POSIX でプロセスがシグナルで終わったときは、`128` にその�
 リーダに `#xff` や `#b101` を足す形も採らない。数のトークンの規則は凍結してある。
 
 2、8、10、16 以外の基数を受ける形も採らない。出力を大文字にする形、`#x` を付ける形も採らない。往復で戻る文字列を一つに決めるためである。
+
+---
+
+## 4. 準クオートのネスト（2026-10-04 に実装）
+
+規則は `dev_memo.md` §4.8。`qq_transfer` が深さを持つ。
+
+カンマは、同じ深さのバッククオートだけを打ち消す。外側を 1 段目とする。2 段目のカンマが 1 つのときは、変数は評価しない。内側のバッククオートとカンマが、シンボルのまま残る。カンマが 2 つあるときだけ、1 段目の式の値が入る。`quote` はカンマを止めない。
+
+```
+(let ((x 'foo))
+  `(a `(b ,,x)))
+; => (a (quasiquote (b (unquote foo))))
+
+(let ((name1 'x) (name2 'y))
+  `(a `(b ,,name1 ,',name2 d) e))
+; => (a (quasiquote (b (unquote x) (unquote (quote y)) d)) e)
+
+(let ((x 'foo))
+  ``,,x)
+; => (quasiquote (unquote foo))
+```
+
+表示は略記に戻さない。上の値は `` `(b ,foo) `` ではなく `(quasiquote (b (unquote foo)))` と出る。
+
+カンマアットは、その深さが有効なときだけ、今どおりリストを継ぐ。深い位置のカンマアットは、`splice` というリストのまま残る。`` `(a `(b ,@,xs)) `` の内側は、`xs` の値を先頭に `splice` を付けたリストになる。
+
+リーダは変えない。`,@` が読まれる名前は `splice` のままである。手書きの `unquote-splicing` は認めない。ネストを含まない `` `(a ,x) `` や `` `#(1 ,x) `` の展開は、今の `cons` と `append` と `(quote ...)` のままである。
+
+`` `(a . ,@v) `` は、今どおり `bad syntax in quasiquote` で止まる。深い位置の `` `(a `(b . ,@x)) `` は止まらず、内側に `(splice x)` を残す。`(unquote a b)` のように引数が 1 個でないものは、どの深さでも `expected: (unquote expression)` で止まる。
+
+カンマがバッククオートより多い `` `,,x `` は、展開では止まらない。余った `(unquote x)` を式として置くので、実行したときに `unquote` を評価する。
