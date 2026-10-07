@@ -3,7 +3,7 @@
 scheme13 のあと、scheme14 で新たに加わった機能の解説。
 土台の処理系そのものは [`scheme13解説.md`](scheme13解説.md) にある。ここには差分だけを書く。
 
-対象は `scheme14/scheme14.cpp`。`eval` と `system` と、`number->string` / `string->number` の基数と、準クオートのネストは、このファイルに入っている。
+対象は `scheme14/scheme14.cpp` に足した機能と、2026-10-07 の共有赤黒木である。`eval` と `system` と、`number->string` / `string->number` の基数と、準クオートのネストと、`with-exception-handler` は、`scheme14.cpp` と `lib14.scm` に入っている。赤黒木のキーは共有の `rbtree_lib_improved.scm` に入っている。
 
 ---
 
@@ -16,7 +16,7 @@ scheme13 のあと、scheme14 で新たに加わった機能の解説。
 | `dev_memo.md` | **なぜそう決めたか。** 設計憲章、凍結仕様、アーキテクチャ | 次に手を入れる人 |
 | `micro_scheme8_notes.md` | 原典 `micro_Scheme8.lisp` の読解 | 由来を知りたい人 |
 
-判断の根拠は `dev_memo.md` にある。`eval` は §4.5、`system` は §4.6、基数は §4.7、準クオートのネストは §4.8。経緯は `log/decisions.md` の末尾「続報」。
+判断の根拠は `dev_memo.md` にある。`eval` は §4.5、`system` は §4.6、基数は §4.7、準クオートのネストは §4.8。`with-exception-handler` は §1.4 と §4.2。経緯は `log/decisions.md` の末尾「続報」。
 
 振る舞いを変えたら、この文書も直す。
 
@@ -520,3 +520,60 @@ POSIX でプロセスがシグナルで終わったときは、`128` にその�
 `` `(a . ,@v) `` は、今どおり `bad syntax in quasiquote` で止まる。深い位置の `` `(a `(b . ,@x)) `` は止まらず、内側に `(splice x)` を残す。`(unquote a b)` のように引数が 1 個でないものは、どの深さでも `expected: (unquote expression)` で止まる。
 
 カンマがバッククオートより多い `` `,,x `` は、展開では止まらない。余った `(unquote x)` を式として置くので、実行したときに `unquote` を評価する。
+
+---
+
+## 5. 共有の赤黒木（2026-10-07 にキーの領域を足した）
+
+処理系には入っていない。リポジトリのルートの `rbtree_lib_improved.scm` で、scheme12・scheme13・scheme14 が同じファイルを読む。判断は `dev_memo.md` の §6 と、`log/decisions.md` の 2026-10-07 にある。手続きの一覧は `scheme12_debug解説.md` §10.1.8 と第17節にある。
+
+ノード向けの `rb-insert` は、今まで通り数のキーである。返った根を次の呼び出しに渡す。ハッシュ表はこの形を使う。
+
+文字列、または数と文字列を一つの木に入れるときは、ハンドルを作る。比較関数は木が持つ。`123` と `"123"` は別のキーである。混合の木では、数をすべて文字列より前に置く。
+
+```scheme
+(load "rbtree_lib_improved.scm")
+
+(define s (rb-new-string))
+(rb-db-insert s "10" "ten")
+(rb-db-insert s "2" "two")
+(rb-db-to-list s)          ; => ("10" "2")
+
+(define m (rb-new-mixed))
+(rb-db-insert m 123 "num")
+(rb-db-insert m "123" "str")
+(rb-db-search m 123)       ; => "num"
+(rb-db-search m "123")     ; => "str"
+```
+
+`rbtree_key_test.scm` で確認した混合の並びは `(3 20 100 123 "100" "123" "20" "3")` である。数の木に文字列を入れると、木を書く前に `error` を呼ぶ。文字列の木に数を入れるとき、混合の木にシンボルを入れるときも同じである。scheme14 では `guard` で受けられる。`error` の次の行へは戻らない。数だけのハンドルは `(rb-new-number)`。比較関数を渡すときは `(rb-new-with cmp)`。
+
+```scheme
+(define db (rb-new-number))
+(rb-db-insert db 123 "from-number")
+(guard (e (else 'refused))
+  (rb-db-insert db "123" "from-string"))
+;; => refused 。木には数の 123 だけが残る
+```
+
+---
+
+## 6. `with-exception-handler`（2026-10-07）
+
+実行中の `error`、`(car '())`、`(/ 1 0)` は、ハンドラへ渡せる。リーダの読み取りエラーと、処理系自身の `internal error` は、ハンドラがあっても止まる。ハンドラが無いときは、今までどおり `Fatal error:` と終了コード 1 である。
+
+```scheme
+(guard (e (else 'caught))
+  (car '()))
+;; => caught
+
+(with-exception-handler (lambda (e) 42)
+  (lambda () (raise-continuable 'x)))
+;; => 42
+```
+
+`guard` の節は `cond` と同じ形である。どの節にも合わなければ、同じオブジェクトを外側のハンドラへ渡す。ハンドラが普通に戻ったときは、失敗した式の続きは走らない。外側へ `exception handler returned` を上げる。外側も無ければ、そこで止まる。
+
+ハンドラが受け取る実行時エラーは、エラーオブジェクトである。`error-object?` で見分け、`error-object-message` で見出しと `given:` の行を取る。位置とキャレットはこの文字列には入らない。`(raise 5)` のように、エラーオブジェクトでない値を上げることもできる。
+
+`with-exception-handler` は `dynamic-wind` でハンドラを付け替える。`call/cc` で外へ抜けると、内側の `after` が内側から走る。

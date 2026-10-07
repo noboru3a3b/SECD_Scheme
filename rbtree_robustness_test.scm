@@ -26,10 +26,13 @@
 ;;; libraries' cores already equivalent, and adopted one more item from it:
 ;;; RB-01, "an empty link is anything that is not a node". rb-null? is now
 ;;; (not (vector? node)) instead of a string comparison against the RB-NIL
-;;; global. Everything else rbtree4.cal has gained since - handles carrying
-;;; a comparator and a misuse-detecting mode, path-copying persistent
-;;; updates, a size field for rank/select - is a change of representation
-;;; and API, deliberately not followed here.
+;;; global. Handles that carry a comparator were added later
+;;; (rb-new-number, rb-new-string, rb-new-mixed) without changing this
+;;; node API or the numeric procedures exercised below. Still not followed
+;;; from rbtree4.cal: the misuse-detecting mode, path-copying persistent
+;;; updates, and a size field for rank/select. String keys and mixed keys
+;;; are checked by rbtree_key_test.scm. A longer mixed run is
+;;; rbtree_mixed_stress_test.scm. Neither lives in this file.
 ;;;
 ;;; This file verifies each fix.
 

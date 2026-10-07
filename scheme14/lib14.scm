@@ -8,10 +8,10 @@
 ;;; sort / reduce / string-upcase のような便利な非標準手続きは入れない。
 ;;; 線を引かないと際限が無く、憲章 §1.1（機能追加の誘惑に負けない）に反する。
 ;;;
-;;; 例外は `exit` / `quit` の1件だけ（15日目の決定64）。R5RS には無いが、
-;;; 原典 micro_Scheme8.lisp にあった `quit` を scheme12 が落としていたので、
-;;; 利用者の判断で復活させた。**基準を緩めたのではない**。足したいものが
-;;; 出たら、そのつど利用者と決めること。
+;;; 基準の例外は2件。どちらも利用者の判断で、基準そのものは緩めていない。
+;;;   - `exit` / `quit`（15日目の決定64）。原典の `quit` を scheme12 が落としていた
+;;;   - `with-exception-handler` / `guard` / `raise` / `raise-continuable`
+;;;     （2026-10-07）。ライブラリの `error` を呼び出し元が受けて続行するため
 ;;;
 ;;; 凍結仕様（dev_memo.md §2）に合わせてあること:
 ;;;   - 数は正確な整数と不正確な実数の2階建て。有理数・複素数は無い（§2.2）
@@ -28,7 +28,9 @@
 ;;; 利用者が呼ぶものではない。ここで定義するのは %isqrt / %list-tail-checked /
 ;;; %map-1 / %map-n / %any-null? の5つ。C++ 側の %sqrt / %expt / %values->list /
 ;;; %wind-push / %wind-pop / %wind-top-after / %exit /
-;;; %set-current-input-port! / %set-current-output-port! を使っている。
+;;; %set-current-input-port! / %set-current-output-port! /
+;;; %current-exception-handler / %set-exception-handler! /
+;;; %make-error-object / %abort-exception を使っている。
 
 ;;; ---------------------------------------------------------------- 数
 ;;; 数は「正確な整数」と「不正確な実数」の2階建て（dev_memo.md §2.2）。
@@ -521,3 +523,72 @@
 ;;; scheme13 では手続きの別名にする。`(quit)` と書く。
 
 (define quit exit)
+
+;;; ------------------------------------ 例外ハンドラ（with-exception-handler）
+;;;
+;;; 箱は #f か (手続き . 外側)。dynamic-wind が付け替えるので、継続は
+;;; この箱を別に持たない。error は値を返さない。ハンドラが普通に戻ったら
+;;; 外側へ exception handler returned を上げ、失敗した式の続きは走らせない。
+
+(define with-exception-handler
+  (lambda (handler thunk)
+    (if (not (procedure? handler))
+        (error "with-exception-handler: wrong type of argument\n  expected: a procedure"
+               handler))
+    (if (not (procedure? thunk))
+        (error "with-exception-handler: wrong type of argument\n  expected: a procedure"
+               thunk))
+    (let ((outer (%current-exception-handler)))
+      (dynamic-wind
+        (lambda () (%set-exception-handler! (cons handler outer)))
+        thunk
+        (lambda () (%set-exception-handler! outer))))))
+
+(define raise
+  (lambda (obj)
+    (let ((cell (%current-exception-handler)))
+      (if (not cell)
+          (%abort-exception obj)
+          (begin
+            (%set-exception-handler! (cdr cell))
+            ((car cell) obj)
+            (raise (%make-error-object "exception handler returned")))))))
+
+(define raise-continuable
+  (lambda (obj)
+    (let ((cell (%current-exception-handler)))
+      (if (not cell)
+          (%abort-exception obj)
+          (call-with-values
+           (lambda ()
+             (%set-exception-handler! (cdr cell))
+             ((car cell) obj))
+           (lambda args
+             (%set-exception-handler! cell)
+             (apply values args)))))))
+
+;;; 節は cond に渡す。利用者が else を書いたときは、後ろに足した else は
+;;; cond が捨てる。継続は with-exception-handler に入る前に捕捉する。
+
+(define-macro (guard clauses . body)
+  (if (not (pair? clauses))
+      (error "bad syntax in guard" clauses))
+  (if (not (symbol? (car clauses)))
+      (error "bad syntax in guard" clauses))
+  (if (null? body)
+      (error "bad syntax in guard" clauses))
+  (let ((var (car clauses))
+        (cls (cdr clauses))
+        (k (gensym)))
+    `((call/cc
+       (lambda (,k)
+         (with-exception-handler
+          (lambda (condition)
+            (,k (lambda ()
+                  (let ((,var condition))
+                    (cond ,@cls (else (raise-continuable ,var)))))))
+          (lambda ()
+            (call-with-values
+             (lambda () ,@body)
+             (lambda args
+               (,k (lambda () (apply values args))))))))))))

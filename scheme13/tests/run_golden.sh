@@ -17,6 +17,11 @@
 # 採り直してある（出力が処理系自身のエラー文言だから。理由は golden/README.md）。
 # そのため **./scheme12_debug を渡すと 11/12 になる**。これは正常。
 #
+# 2026-10-07 に赤黒木のキー試験を足した。床の12件には入れていない。
+# rbtree_key_test.scm と rbtree_mixed_stress_test.scm は FILES
+# （scheme12 でも同じバイトが出る）。拒否3本は scheme14 の guard を使うので、
+# このランナーには入れていない。一覧は tests/golden/README.md。
+#
 # ゴールデンの後に、**起動時ライブラリがどこから起動しても読めること**も見る。
 # 7日目まで scheme13 は実行ファイルの隣と cwd しか見ておらず、リポジトリの
 # ルート以外から起動すると reverse / map / append などが黙って消えていた。
@@ -35,7 +40,9 @@ fi
 
 FILES="system_lib.scm mlib7.scm hashtable_lib.scm rbtree_lib_improved.scm \
        list_test1.scm test_fixes.scm test_improvements.scm test_vector_env.scm \
-       rbtree_robustness_test.scm rbtree_stress_test_safe.scm \
+       rbtree_robustness_test.scm rbtree_key_test.scm \
+       rbtree_mixed_stress_test.scm \
+       rbtree_stress_test_safe.scm \
        performance_test.scm test-case6.scm"
 
 pass=0

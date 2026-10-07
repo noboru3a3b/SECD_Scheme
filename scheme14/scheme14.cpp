@@ -213,8 +213,9 @@ static std::string pos_label(const SourcePos& pos) {
 // 位置は任意（known() が false なら位置なし）。
 struct SchemeError : std::runtime_error {
     SourcePos pos;
-    SchemeError(const std::string& msg, SourcePos p)
-        : std::runtime_error(msg), pos(p) {}
+    bool catchable;   // 偽は internal error と、ハンドラが尽きて止めるとき
+    SchemeError(const std::string& msg, SourcePos p, bool c = true)
+        : std::runtime_error(msg), pos(p), catchable(c) {}
 };
 
 // (exit) の終了要求（15日目の決定64）。誤りの報告ではないので SchemeError とは
@@ -228,8 +229,11 @@ struct SchemeExit {
     int code;
 };
 
+// リーダの中では 1。読み取りエラーはハンドラへ渡さない。
+static int g_reading = 0;
+
 [[noreturn]] static void error_at(const SourcePos& pos, const std::string& msg) {
-    throw SchemeError(msg, pos);
+    throw SchemeError(msg, pos, g_reading == 0);
 }
 [[noreturn]] static void error_here(const std::string& msg) {
     throw SchemeError(msg, SourcePos{});
@@ -264,7 +268,7 @@ static std::string expected_given(std::string_view expected, std::string_view gi
 [[noreturn]] static void internal_error(const SourcePos& pos, const std::string& what) {
     throw SchemeError("internal error: " + what +
                       detail("note", "this is a bug in scheme14 itself, "
-                                     "not in the program being run"), pos);
+                                     "not in the program being run"), pos, false);
 }
 
 // エラーの本文を組み立てる。呼び出し側が "Error: " などの前置きを付ける。
@@ -327,7 +331,7 @@ enum class Tag : std::uint8_t {
     Fixnum,       // ヘッダを持たない即値。tag_of() だけが返す
     Nil, Boolean, Bignum, Flonum, String, Symbol, Pair, Vector,
     Closure, Continuation, Primitive, Macro, SpecialForm, Environment,
-    Port, Eof, Values
+    Port, Eof, Values, ErrorObject
 };
 
 // ヘッダ 12 バイト（tag / src_col / src_file / src_line）。
@@ -441,6 +445,16 @@ struct Values : Object {
     Values() : Object(Tag::Values) {}
 };
 
+// 実行時エラーをハンドラへ渡す箱。本文は SchemeError::what() と同じで、
+// 位置とキャレットは含めない。%abort-exception が止めるときは、この位置を
+// ライブラリの行で上書きしない。
+struct ErrorObject : Object {
+    GcString  message;
+    SourcePos pos;
+    ErrorObject(const GcString& m, SourcePos p)
+        : Object(Tag::ErrorObject), message(m), pos(p) {}
+};
+
 // dynamic-wind の1段。id は「同じ枠か」を見るための通し番号で、同じ
 // before/after の組が入れ子で二度積まれても別物と分かるようにする（決定59）。
 struct WindEntry {
@@ -539,6 +553,13 @@ static ValuePtr g_stdout_port = nullptr;
 // 大域に置く。継続はこれのコピーを持ち、起動時に差分だけ巻き戻す（決定59）。
 static RootVec<WindEntry> g_winds;
 static std::uint64_t      g_wind_next_id = 1;
+
+// 例外ハンドラ。#f（または未設定）なら、実行時エラーは今までどおり止まる。
+// 手続きが入っているときはペア (手続き . 外側)。付け替えは dynamic-wind が
+// 行うので、継続はこの箱を別に持たない。
+static ValuePtr g_handler = nullptr;
+// VM::run の入れ子。マクロ展開の内側ではハンドラを呼ばず、いちばん外が受ける。
+static int g_run_depth = 0;
 
 // --- 構築 ------------------------------------------------------------------
 
@@ -910,6 +931,16 @@ static void write_value(std::string& out, ValuePtr v, PathSet& path) {
         case Tag::Eof:
             out += "#<eof>";
             return;
+        case Tag::ErrorObject: {
+            const GcString& m = static_cast<ErrorObject*>(v)->message;
+            std::string_view text = view_of(m);
+            std::size_t nl = text.find('\n');
+            if (nl != std::string_view::npos) text = text.substr(0, nl);
+            out += "#<error ";
+            out.append(text.data(), text.size());
+            out += '>';
+            return;
+        }
     }
     out += "#<unknown>";
 }
@@ -1219,6 +1250,10 @@ struct TopForm {
 };
 
 static GcVec<TopForm> read_all(std::uint16_t file_id) {
+    struct Reading {
+        Reading() { ++g_reading; }
+        ~Reading() { --g_reading; }
+    } reading;
     Reader r(file_id);
     GcVec<TopForm> out;
     for (;;) {
@@ -2531,6 +2566,14 @@ static Env* make_frame(Closure* clo, ValuePtr* argv, std::size_t n, const Source
     return frame;
 }
 
+static ValuePtr make_error_object(const std::string& msg, SourcePos pos) {
+    return new ErrorObject(to_gc(msg), pos);
+}
+
+static bool handler_installed() {
+    return g_handler && !is_false(g_handler);
+}
+
 struct VM {
     ValueVec         stack;
     GcVec<DumpEntry> dump;
@@ -2693,7 +2736,33 @@ struct VM {
         }
     }
 
+    // 失敗した命令の続きは捨てる。raise は戻らないので、ここへは RTN しない。
+    // ダンプは残す。guard の継続が機械全体を差し替える。
+    void abandon_to_raise(ValuePtr obj, const SourcePos& pos) {
+        GlobalCell* cell = global_cell("raise");
+        if (!cell->value)
+            throw SchemeError(
+                "internal error: raise is not defined" +
+                detail("note", "this is a bug in scheme14 itself, "
+                               "not in the program being run"),
+                pos, false);
+        CodePtr code = new Code();
+        Instruction ld_obj(Op::LDC); ld_obj.p1 = obj;          emit(code, ld_obj, pos);
+        Instruction ld_raise(Op::LDC); ld_raise.p1 = cell->value; emit(code, ld_raise, pos);
+        Instruction app(Op::APP); app.a = 1;                   emit(code, app, pos);
+        emit(code, Instruction(Op::STOP), pos);
+        stack.clear();
+        base = 0;
+        env = nullptr;
+        c = code;
+        pc = 0;
+    }
+
     ValuePtr run() {
+        struct Depth {
+            Depth() { ++g_run_depth; }
+            ~Depth() { --g_run_depth; }
+        } depth;
         for (;;) {
             if (!c || pc >= c->ins.size()) internal_error(SourcePos{}, "code exhausted without reaching STOP");
             const Instruction& ins = c->ins[pc++];
@@ -2859,11 +2928,14 @@ struct VM {
                     return stack.empty() ? g_nil : stack.back();
             }
             } catch (SchemeError& e) {
+                // 新しい例外に詰め直すと catchable が落ちる。位置だけ埋める。
                 if (!e.pos.known()) {
                     SourcePos p = blame_pos(ins.pos);
-                    if (p.known()) throw SchemeError(e.what(), p);
+                    if (p.known()) e.pos = p;
                 }
-                throw;
+                if (!e.catchable || g_run_depth > 1 || !handler_installed())
+                    throw;
+                abandon_to_raise(make_error_object(e.what(), e.pos), e.pos);
             }
         }
     }
@@ -3954,6 +4026,10 @@ static ValuePtr prim_read_line(ValuePtr* a, std::size_t n) {
 
 // ポートから S 式を1つ読む。括弧の対応で切り出してからリーダに渡す。
 static ValuePtr read_one_from_port(Port* p, const char* who) {
+    struct Reading {
+        Reading() { ++g_reading; }
+        ~Reading() { --g_reading; }
+    } reading;
     std::string buf;
     int depth = 0;
     bool in_string = false, in_comment = false, seen = false;
@@ -4093,6 +4169,42 @@ static ValuePtr prim_raise_error(ValuePtr* a, std::size_t n) {
                                       : to_string(a[0]);
     for (std::size_t i = 1; i < n; ++i) msg += detail("given", to_string(a[i]));
     error_here(msg);
+}
+
+// ハンドラの箱。#f か (手続き . 外側)。付け替えは lib14.scm の dynamic-wind。
+static ValuePtr prim_current_exception_handler(ValuePtr*, std::size_t n) {
+    need_args("%current-exception-handler", n, 0, 0);
+    return g_handler ? g_handler : g_false;
+}
+static ValuePtr prim_set_exception_handler(ValuePtr* a, std::size_t n) {
+    need_args("%set-exception-handler!", n, 1, 1);
+    g_handler = a[0];
+    return g_nil;
+}
+static ValuePtr prim_make_error_object(ValuePtr* a, std::size_t n) {
+    need_args("%make-error-object", n, 1, 1);
+    if (!is_string(a[0])) prim_type_error("%make-error-object", "a string", a[0]);
+    return make_error_object(to_std(as_string(a[0])), SourcePos{});
+}
+static ValuePtr prim_error_objectp(ValuePtr* a, std::size_t n) {
+    need_args("error-object?", n, 1, 1);
+    return make_bool(has_tag(a[0], Tag::ErrorObject));
+}
+static ValuePtr prim_error_object_message(ValuePtr* a, std::size_t n) {
+    need_args("error-object-message", n, 1, 1);
+    if (!has_tag(a[0], Tag::ErrorObject))
+        prim_type_error("error-object-message", "an error object", a[0]);
+    return make_string(view_of(static_cast<ErrorObject*>(a[0])->message));
+}
+// ハンドラが尽きたときの停止。エラーオブジェクトの位置は blame_pos で
+// ライブラリの行に置き換えない。catchable は偽なので、もう一度ハンドラへは行かない。
+static ValuePtr prim_abort_exception(ValuePtr* a, std::size_t n) {
+    need_args("%abort-exception", n, 1, 1);
+    if (has_tag(a[0], Tag::ErrorObject)) {
+        ErrorObject* e = static_cast<ErrorObject*>(a[0]);
+        throw SchemeError(to_std(e->message), e->pos, false);
+    }
+    throw SchemeError(to_string(a[0]), SourcePos{}, false);
 }
 
 // (%exit obj) — 終了要求を投げる。**外へ出る dynamic-wind の after は
@@ -4559,6 +4671,12 @@ static void init_globals() {
         {"%wind-top-after", prim_wind_top_after},
 
         {"error", prim_raise_error}, {"%exit", prim_exit_now},
+        {"%current-exception-handler", prim_current_exception_handler},
+        {"%set-exception-handler!", prim_set_exception_handler},
+        {"%make-error-object", prim_make_error_object},
+        {"%abort-exception", prim_abort_exception},
+        {"error-object?", prim_error_objectp},
+        {"error-object-message", prim_error_object_message},
         {"gensym", prim_gensym}, {"random", prim_random}, {"random-seed", prim_random_seed},
         {"gc-collect", prim_gc_collect}, {"gc-heap-size", prim_gc_heap_size},
         {"gc-free-bytes", prim_gc_free_bytes},

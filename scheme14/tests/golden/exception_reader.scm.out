@@ -1,0 +1,4 @@
+before
+Fatal error: scheme14/tests/exception_reader_bad.scm:1:1: unexpected EOF in list
+    (
+    ^

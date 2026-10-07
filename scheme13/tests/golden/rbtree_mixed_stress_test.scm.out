@@ -1,0 +1,35 @@
+
+Red-Black Tree Library (Improved) loaded.
+Commands:
+  (rb-test)      - Run comprehensive tests
+  (rb-example)   - Run simple example
+===========================================
+  rbtree mixed stress test
+===========================================
+
+--- Section 1: random insert/delete ---
+[PASS] 1a. valid after every one of 2500 ops
+[PASS] 1b. some index was stored as both number and string
+[PASS] 1c. search matches the reference
+[PASS] 1d. in-order length matches the live keys
+[PASS] 1e. in-order is strictly increasing under mixed cmp
+[PASS] 1f. delete-min yields the in-order sequence
+[PASS] 1g. empty after delete-min
+[PASS] 1h. empty tree is valid
+
+--- Section 2: paired number and string keys ---
+[PASS] 2a. 600 keys, valid
+[PASS] 2b. 10 and "10" are different entries
+[PASS] 2c. only the 300 strings remain
+[PASS] 2d. valid after deleting every number
+[PASS] 2e. 10 is gone and "10" remains
+[PASS] 2f. "10" stands before "2"
+[PASS] 2g. remaining keys are strictly dictionary-ordered
+[PASS] 2h. delete-min drains the strings in that order
+[PASS] 2i. empty at the end
+
+===========================================
+  Results: 17/17 passed
+*** ALL MIXED STRESS TESTS PASSED ***
+===========================================
+NIL

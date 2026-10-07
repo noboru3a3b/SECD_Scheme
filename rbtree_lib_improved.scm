@@ -1,6 +1,18 @@
 ;;;
 ;;; rbtree_lib_improved.scm : Red-Black Tree Library for scheme12 (Improved Display)
 ;;;
+;;; The node procedures (rb-insert, rb-search, rb-delete, ...) compare with
+;;; <, =, and >. Keys on that path are numbers. hashtable_lib.scm uses it.
+;;;
+;;; A database handle keeps its comparator with the root, as in rbtree4.cal
+;;; (RB-07). cmp(a, b) is negative, zero, or positive.
+;;;   (rb-new-number)   numbers, ordered by <
+;;;   (rb-new-string)   strings, ordered by string<?
+;;;   (rb-new-mixed)    numbers and strings together. Every number stands
+;;;                     before every string, so 123 and "123" differ.
+;;;   (rb-new-with cmp) caller-supplied comparator
+;;; A key from outside that domain is an error, and the tree is left as it was.
+;;;
 
 ;;; Constants
 (define BLACK 0)
@@ -483,6 +495,274 @@
         (begin
           (display "  ")
           (rb-print-indent (- n 1))))))
+
+;;; ===========================================================================
+;;; Comparators and database handles (rbtree4.cal RB-07)
+;;;
+;;; A handle is a 2-element vector: root, then cmp. A node is 5 elements,
+;;; so the two are not interchangeable. cmp(a, b) is -1, 0, or 1.
+;;; 123 and "123" compare unequal in every comparator here: rb-cmp-number
+;;; rejects the string, rb-cmp-string rejects the number, and rb-cmp-mixed
+;;; orders every number before every string.
+;;; ===========================================================================
+
+(define rb-reject-key
+  (lambda (who a b)
+    (error (string-append who ": key is outside this tree's domain") a b)))
+
+(define rb-cmp-number
+  (lambda (a b)
+    (if (and (number? a) (number? b))
+        (cond ((< a b) -1)
+              ((> a b) 1)
+              (else 0))
+        (rb-reject-key "rb-cmp-number" a b))))
+
+(define rb-cmp-string
+  (lambda (a b)
+    (if (and (string? a) (string? b))
+        (cond ((string<? a b) -1)
+              ((string>? a b) 1)
+              (else 0))
+        (rb-reject-key "rb-cmp-string" a b))))
+
+;;; Numbers first, then strings. Cross-type comparison never returns 0.
+(define rb-cmp-mixed
+  (lambda (a b)
+    (cond ((and (number? a) (number? b)) (rb-cmp-number a b))
+          ((and (string? a) (string? b)) (rb-cmp-string a b))
+          ((and (number? a) (string? b)) -1)
+          ((and (string? a) (number? b)) 1)
+          (else (rb-reject-key "rb-cmp-mixed" a b)))))
+
+(define rb-new-with
+  (lambda (cmp)
+    (vector RB-NIL cmp)))
+
+(define rb-new-number
+  (lambda ()
+    (rb-new-with rb-cmp-number)))
+
+(define rb-new-string
+  (lambda ()
+    (rb-new-with rb-cmp-string)))
+
+(define rb-new-mixed
+  (lambda ()
+    (rb-new-with rb-cmp-mixed)))
+
+(define rb-db-root
+  (lambda (db)
+    (vector-ref db 0)))
+
+(define rb-db-cmp
+  (lambda (db)
+    (vector-ref db 1)))
+
+;;; Confirm the key is in this comparator's domain before any rotation.
+;;; An empty tree never calls cmp during insert, so the check has to
+;;; happen up here. Comparing the key with itself is enough: a matching
+;;; pair returns 0, and a foreign type calls error.
+(define rb-db-check-key
+  (lambda (db key)
+    ((rb-db-cmp db) key key)
+    key))
+
+(define rb-search-cmp
+  (lambda (node key cmp)
+    (if (rb-null? node)
+        false
+        (let ((c (cmp key (rb-key node))))
+          (cond ((= c 0) (rb-data node))
+                ((< c 0) (rb-search-cmp (rb-left node) key cmp))
+                (else (rb-search-cmp (rb-right node) key cmp)))))))
+
+(define rb-contains-cmp?
+  (lambda (node key cmp)
+    (if (rb-null? node)
+        false
+        (let ((c (cmp key (rb-key node))))
+          (cond ((= c 0) true)
+                ((< c 0) (rb-contains-cmp? (rb-left node) key cmp))
+                (else (rb-contains-cmp? (rb-right node) key cmp)))))))
+
+(define rb-insert-impl-cmp
+  (lambda (node key data cmp)
+    (if (rb-null? node)
+        (make-rb-node key data)
+        (let ((c (cmp key (rb-key node))))
+          (cond ((< c 0)
+                 (rb-set-left! node (rb-insert-impl-cmp (rb-left node) key data cmp)))
+                ((> c 0)
+                 (rb-set-right! node (rb-insert-impl-cmp (rb-right node) key data cmp)))
+                (else
+                 (rb-set-data! node data)))
+          (rb-fix-up node)))))
+
+(define rb-insert-cmp
+  (lambda (node key data cmp)
+    (let ((result (rb-insert-impl-cmp node key data cmp)))
+      (if (not (rb-null? result))
+          (rb-set-color! result BLACK))
+      result)))
+
+;;; Same descent as rb-delete-impl. The first comparison is taken before
+;;; move-red, and the key is read again after a rotation, because the
+;;; node under the cursor may have changed.
+(define rb-delete-impl-cmp
+  (lambda (node key cmp)
+    (if (rb-null? node)
+        RB-NIL
+        (if (< (cmp key (rb-key node)) 0)
+            (begin
+              (if (not (rb-null? (rb-left node)))
+                  (if (and (rb-is-black? (rb-left node))
+                           (not (rb-null? (rb-left node)))
+                           (rb-is-black? (rb-left (rb-left node))))
+                      (set! node (rb-move-red-left node))))
+              (rb-set-left! node (rb-delete-impl-cmp (rb-left node) key cmp))
+              (rb-fix-up node))
+            (begin
+              (if (rb-is-red? (rb-left node))
+                  (set! node (rb-rotate-right node)))
+              (if (and (= (cmp key (rb-key node)) 0)
+                       (rb-null? (rb-right node)))
+                  RB-NIL
+                  (begin
+                    (if (not (rb-null? (rb-right node)))
+                        (if (and (rb-is-black? (rb-right node))
+                                 (not (rb-null? (rb-right node)))
+                                 (rb-is-black? (rb-left (rb-right node))))
+                            (set! node (rb-move-red-right node))))
+                    (if (= (cmp key (rb-key node)) 0)
+                        (let ((min-node (rb-search-min-node (rb-right node))))
+                          (rb-set-key! node (rb-key min-node))
+                          (rb-set-data! node (rb-data min-node))
+                          (rb-set-right! node (rb-delete-min-impl (rb-right node))))
+                        (rb-set-right! node (rb-delete-impl-cmp (rb-right node) key cmp)))
+                    (rb-fix-up node))))))))
+
+(define rb-delete-cmp
+  (lambda (node key cmp)
+    (if (rb-null? node)
+        RB-NIL
+        (begin
+          (if (and (rb-is-black? (rb-left node))
+                   (rb-is-black? (rb-right node)))
+              (rb-set-color! node RED))
+          (let ((result (rb-delete-impl-cmp node key cmp)))
+            (if (not (rb-null? result))
+                (rb-set-color! result BLACK))
+            result)))))
+
+;;; In-order check for a caller-supplied comparator. rb-check-order stays
+;;; numeric (>=); this one asks cmp. rb-order-prev starts unused, so the
+;;; first key may be a string.
+(define rb-order-cmp rb-cmp-number)
+
+(define rb-check-order-cmp
+  (lambda (node)
+    (if (not (rb-null? node))
+        (begin
+          (rb-check-order-cmp (rb-left node))
+          (if (and rb-order-prev-set
+                   (>= (rb-order-cmp rb-order-prev (rb-key node)) 0))
+              (begin
+                (display "ERROR: BST order violated at key ")
+                (display (rb-key node))
+                (newline)
+                (set! rb-order-ok false)))
+          (set! rb-order-prev (rb-key node))
+          (set! rb-order-prev-set true)
+          (rb-check-order-cmp (rb-right node))))))
+
+;;; Quiet check. Prints only when a property fails inside rb-check-property
+;;; or the order walk. Returns true for an empty tree.
+(define rb-db-valid?
+  (lambda (db)
+    (let ((node (rb-db-root db)))
+      (or (rb-null? node)
+          (and (rb-is-black? node)
+               (let ((height (rb-check-property node)))
+                 (set! rb-order-ok true)
+                 (set! rb-order-prev-set false)
+                 (set! rb-order-cmp (rb-db-cmp db))
+                 (rb-check-order-cmp node)
+                 (and (not (= height -1)) rb-order-ok)))))))
+
+(define rb-db-validate
+  (lambda (db)
+    (let ((node (rb-db-root db)))
+      (cond
+        ((rb-null? node)
+         (display "Tree is valid (empty)")
+         (newline)
+         true)
+        ((rb-is-red? node)
+         (display "ERROR: Root is not black!")
+         (newline)
+         (display "Tree is INVALID")
+         (newline)
+         false)
+        ((rb-db-valid? db)
+         (display "Tree is valid (black height: ")
+         (display (rb-check-property node))
+         (display ")")
+         (newline)
+         true)
+        (else
+         (display "Tree is INVALID")
+         (newline)
+         false)))))
+
+(define rb-db-insert
+  (lambda (db key data)
+    (let ((cmp (rb-db-cmp db)))
+      (rb-db-check-key db key)
+      (vector-set! db 0
+                   (if (eq? cmp rb-cmp-number)
+                       (rb-insert (rb-db-root db) key data)
+                       (rb-insert-cmp (rb-db-root db) key data cmp)))
+      db)))
+
+(define rb-db-search
+  (lambda (db key)
+    (let ((cmp (rb-db-cmp db)))
+      (rb-db-check-key db key)
+      (if (eq? cmp rb-cmp-number)
+          (rb-search (rb-db-root db) key)
+          (rb-search-cmp (rb-db-root db) key cmp)))))
+
+(define rb-db-contains?
+  (lambda (db key)
+    (let ((cmp (rb-db-cmp db)))
+      (rb-db-check-key db key)
+      (if (eq? cmp rb-cmp-number)
+          (rb-contains? (rb-db-root db) key)
+          (rb-contains-cmp? (rb-db-root db) key cmp)))))
+
+(define rb-db-delete
+  (lambda (db key)
+    (let ((cmp (rb-db-cmp db)))
+      (rb-db-check-key db key)
+      (vector-set! db 0
+                   (if (eq? cmp rb-cmp-number)
+                       (rb-delete (rb-db-root db) key)
+                       (rb-delete-cmp (rb-db-root db) key cmp)))
+      db)))
+
+(define rb-db-delete-min
+  (lambda (db)
+    (vector-set! db 0 (rb-delete-min (rb-db-root db)))
+    db))
+
+(define rb-db-to-list
+  (lambda (db)
+    (rb-to-list (rb-db-root db))))
+
+(define rb-db-count
+  (lambda (db)
+    (rb-count-nodes (rb-db-root db))))
 
 ;;; Test function - IMPROVED
 (define rb-test

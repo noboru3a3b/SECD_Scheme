@@ -8,6 +8,10 @@
 # 比較はそことのバイト一致である。scheme12 の LF 出力へ戻さない。
 # 床は既存資産12件。test-case6.scm だけは採り直してある（決定27・32。終了コードは 0）。
 # ./scheme12_debug を渡すと、その1件でずれる。これは正常。
+# 2026-10-07 に赤黒木のキー試験を足した。床の12件には入れていない。
+# rbtree_key_test.scm と rbtree_mixed_stress_test.scm は FILES
+# （scheme12 でも同じバイトが出る）。拒否3本は guard で受けて終了コード 0。
+# 例外ハンドラの試験も OWN_TESTS。一覧は tests/golden/README.md。
 #
 # **既存資産は §2 の凍結仕様を測るためのものではない**（26日目に変異法で測った。
 # 表は log/decisions.md の決定133）。既存 .scm は値を計算して表示する筋道しか通らず、
@@ -34,7 +38,9 @@ fi
 
 FILES="system_lib.scm mlib7.scm hashtable_lib.scm rbtree_lib_improved.scm \
        list_test1.scm test_fixes.scm test_improvements.scm test_vector_env.scm \
-       rbtree_robustness_test.scm rbtree_stress_test_safe.scm \
+       rbtree_robustness_test.scm rbtree_key_test.scm \
+       rbtree_mixed_stress_test.scm \
+       rbtree_stress_test_safe.scm \
        performance_test.scm test-case6.scm"
 
 pass=0
@@ -50,7 +56,12 @@ trap 'rm -f "$tmp" "$so" "$se"' EXIT
 OWN_TESTS="$TREE/tests/spec_test.scm $TREE/tests/lib14_test.scm \
            $TREE/tests/port_test.scm \
            $TREE/tests/exit_test.scm $TREE/tests/macro_print_test.scm \
-           $TREE/tests/debug_test.scm $TREE/tests/deep_test.scm"
+           $TREE/tests/debug_test.scm $TREE/tests/deep_test.scm \
+           rbtree_key_reject_number.scm rbtree_key_reject_string.scm \
+           rbtree_key_reject_mixed.scm \
+           $TREE/tests/exception_test.scm \
+           $TREE/tests/exception_handler_returned.scm \
+           $TREE/tests/exception_reader.scm"
 
 run_one() {
     f=$1

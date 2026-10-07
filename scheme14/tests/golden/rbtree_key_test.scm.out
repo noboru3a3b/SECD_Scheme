@@ -1,0 +1,82 @@
+
+Red-Black Tree Library (Improved) loaded.
+Commands:
+  (rb-test)      - Run comprehensive tests
+  (rb-example)   - Run simple example
+===========================================
+  rbtree key tests (string / mixed)
+===========================================
+
+--- Section 1: comparators ---
+[PASS] 1a. number: 2 before 10
+[PASS] 1b. number: equals
+[PASS] 1c. string: "10" before "2"
+[PASS] 1d. string: equals
+[PASS] 1e. mixed: 123 before "123"
+[PASS] 1f. mixed: "123" after 123
+[PASS] 1g. mixed: number equals
+[PASS] 1h. mixed: string equals
+[PASS] 1i. mixed: 0 before ""
+
+--- Section 2: string tree ---
+[PASS] 2a. in-order, dictionary, empty string first
+[PASS] 2b. valid after those inserts
+[PASS] 2c. search cat
+[PASS] 2d. replace keeps one cat
+[PASS] 2e. count unchanged by replace
+[PASS] 2f. contains a key whose value is false
+[PASS] 2g. search still returns that false
+[PASS] 2h. missing key is absent
+[PASS] 2i. missing search is false
+[PASS] 2j. dog is gone
+[PASS] 2k. still valid after delete
+[PASS] 2l. deleting a missing key leaves the tree valid
+[PASS] 2m. delete-min drops the empty string
+[PASS] 2n. valid after delete-min
+[PASS] 2o. "100" "123" "20" "3"
+[PASS] 2p. that tree is valid
+[PASS] 2q. 20 string keys, tree is valid
+[PASS] 2r. count is 20
+[PASS] 2s. "10" finds 10
+[PASS] 2t. "2" finds 2
+[PASS] 2u. deleted "0".."9", 10 left
+[PASS] 2v. "0" is gone
+[PASS] 2w. "10" remains
+[PASS] 2x. valid after the deletes
+[PASS] 2y. delete-min down to empty stays valid
+[PASS] 2z. empty at the end
+
+--- Section 3: mixed tree ---
+[PASS] 3a. numbers, then dictionary strings
+[PASS] 3b. valid
+[PASS] 3c. 123 is the number's value
+[PASS] 3d. "123" is the string's value
+[PASS] 3e. both keys are present
+[PASS] 3f. deleting 123 leaves "123"
+[PASS] 3g. 123 itself is gone
+[PASS] 3h. valid after deleting the number
+[PASS] 3i. "123" is gone too
+[PASS] 3j. valid after deleting the string
+[PASS] 3k. six keys remain
+ERROR: BST order violated at key 5
+[PASS] 3l. string before number is rejected
+[PASS] 3m. number before string is accepted
+
+--- Section 4: number handle ---
+[PASS] 4a. handle order matches rb-insert
+[PASS] 4b. handle is valid
+[PASS] 4c. search 3
+[PASS] 4d. replace
+[PASS] 4e. deleted 1
+[PASS] 4f. still valid
+[PASS] 4g. three keys left
+Tree is valid (black height: 3)
+[PASS] 4h. rb-db-validate agrees
+[PASS] 4i. custom cmp reverses numeric order
+[PASS] 4j. custom tree is valid under its own cmp
+
+===========================================
+  Results: 58/58 passed
+*** ALL KEY TESTS PASSED ***
+===========================================
+NIL

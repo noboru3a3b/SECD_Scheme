@@ -39,6 +39,30 @@
 `macro_print_test.scm` の出力には**ソース位置（行・桁）が乗る**。
 **このファイルの行を動かすとゴールデンがずれる**ので、足すときは末尾に足すこと。
 
+## 赤黒木のキー（2026-10-07）
+
+既存資産12件の床は増やしていない。数・文字列・混合の成功側は、
+scheme13 と scheme14 の `tests/golden/` に同じバイトで置いてある。
+`rbtree_key_test.scm`、`rbtree_mixed_stress_test.scm`、床の
+`rbtree_robustness_test.scm` は scheme12 でも同じバイトが出る。
+拒否3本と例外ハンドラの試験は scheme14 だけである。
+
+| ファイル | `run_golden.sh` での位置 | 終了コード | 何を押さえるか |
+| --- | --- | --- | --- |
+| `rbtree_key_test.scm` | `FILES` | 0 | 文字列、混合、数のハンドル。58項目 |
+| `rbtree_mixed_stress_test.scm` | `FILES` | 0 | 乱択 2500 回と、0..299 の数・文字列ペア |
+| `rbtree_key_reject_number.scm` | `OWN_TESTS` | 0 | 数の木が `"123"` を拒否し、`123` が残る |
+| `rbtree_key_reject_string.scm` | `OWN_TESTS` | 0 | 文字列の木が `123` を拒否し、`"123"` が残る |
+| `rbtree_key_reject_mixed.scm` | `OWN_TESTS` | 0 | 混合の木がシンボルを拒否し、両方のキーが残る |
+| `exception_test.scm` | `OWN_TESTS` | 0 | `guard`、`raise-continuable`、`dynamic-wind` |
+| `exception_handler_returned.scm` | `OWN_TESTS` | 1 | ハンドラが戻ると続きが走らない |
+| `exception_reader.scm` | `OWN_TESTS` | 1 | リーダのエラーはハンドラがあっても止まる |
+
+拒否3本は `guard` で受ける。`error` の次の行へは戻らない。木に入れたキーは残る。
+`./scheme12_debug` を渡すと、`guard` が無いので落ちる。それは正常である。
+`exception_handler_returned.scm` の `.out` にはそのファイルの行番号が乗る。
+行を動かすとずれる。
+
 ## `errors/` と `repl/` — 27日目に足した2つ
 
 上の表のゴールデンは、どれも**正常に走りきるプログラムの出力**である。

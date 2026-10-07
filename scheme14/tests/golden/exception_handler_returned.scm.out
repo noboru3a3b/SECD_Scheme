@@ -1,0 +1,4 @@
+before
+Fatal error: scheme14/tests/exception_handler_returned.scm:6:14: exception handler returned
+      (lambda () (error "boom")))
+                 ^

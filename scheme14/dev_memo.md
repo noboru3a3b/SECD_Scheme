@@ -111,9 +111,11 @@ scheme12 は機能的には完成しているが、複数の書き手の判断�
 3. **ソース位置つきエラーを実装する。**
    リーダが行・列を記録し、コンパイル時・実行時エラーに位置を添える。
    デバッグ処理系としての価値が最も上がる部分。
-   **`with-exception-handler` は入れない。** 当初は `error` と `dynamic-wind` も
-   入れないと決めた。8日目の決定41で `error`（見出しを出して止まるだけで、捕捉はしない）を足し、
-   13日目の決定58・59で多値と `dynamic-wind` を足した。これらは外さない。経緯はログ。
+   当初は `error` と `dynamic-wind` と `with-exception-handler` を入れないと決めた。
+   8日目の決定41で `error`（見出しを出して止まる）を足し、13日目の決定58・59で
+   多値と `dynamic-wind` を足した。2026-10-07 に、ライブラリが `error` を呼んでも
+   呼び出し元が `with-exception-handler` で受けて、外側から続行できるようにした。
+   ハンドラが無いときは、今までどおり見出しを出して止まる。経緯はログ。
 
 ### 1.5 デバッグ機能は一級市民
 
@@ -392,6 +394,7 @@ Error: mylib.scm:1:1: car: wrong type of argument
   | `attempt to call a non-procedure` | 呼べないものを呼んだ |
   | `internal error: <what>` | **処理系自身の不変条件が壊れた。利用者の誤りではない** |
   | `<who>: cannot run program` | `system` がプロセスを起動できなかった。`given:` はプログラム名 |
+  | `exception handler returned` | ハンドラが値を返した。失敗した式の続きは走らない |
 
   詳細行のラベルは `expected` / `given` / `note` の3つ。`note` は expected/given に
   当てはまらない補足（未束縛の説明、内部エラーの断り書き）にだけ使う。
@@ -753,7 +756,11 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 145項目の照合が入っていて、NG は 13件のままである（内訳は `tests/golden/README.md`）。
 
 いまの `test` には scheme14 自身のテストが加わっている。件数の現行値は §7。
-この12件の一覧は増やさない。
+この12件の一覧は増やさない。2026-10-07 の赤黒木キー試験5本も、この12件には
+入っていない。`rbtree_key_test.scm` と `rbtree_mixed_stress_test.scm` は
+`run_golden.sh` の `FILES` にあり、scheme12 でも同じバイトが出る。拒否3本は
+`guard` で受けて終了コード 0。例外ハンドラの試験3本も `OWN_TESTS`。
+一覧は `tests/golden/README.md`。
 
 対象: `system_lib.scm` `mlib7.scm` `hashtable_lib.scm` `rbtree_lib_improved.scm`
 `list_test1.scm` `test_fixes.scm` `test_improvements.scm` `test_vector_env.scm`
@@ -887,7 +894,7 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - **開発環境は Windows（§1.2）。** Dev Container に戻さない。
 - 決定12 — **ソース位置はオブジェクトのヘッダに埋める。** 副表に戻さない（§4.2）。
 - 決定24 — **ファイル上のセクション順を §3 の番号どおりに並べ直さない。** 命令セットがコンパイラより前にある。
-- 決定41・58・59 — **`error`、多値、`dynamic-wind` は入っている。** `with-exception-handler` は無い。§1.4 の当初の「入れない」はここまで改まっている。外さない。
+- 決定41・58・59 — **`error`、多値、`dynamic-wind` は入っている。** 2026-10-07 に `with-exception-handler`、`guard`、`raise`、`raise-continuable` を足した。ハンドラが無い `error` は見出しを出して止まる。ハンドラが値を返すと `exception handler returned` になり、失敗した式の続きは走らない。
 - **`eval` は §4.5。** フレームを値にしない。式は呼び出した VM で走らせ、`STOP` も別 VM も使わない。空の環境は特殊形式の写しと `:undef`。未束縛参照のセルは対話環境の表にだけ足す。
 - **`system` は §4.6。** プログラム名と引数の列を渡し、終了コードを返す。OS の分岐はこの手続きの中だけ。シェルの文字列にはしない。子の出力は OS の標準ストリームで、`current-output-port` には従わない。
 - **`number->string` と `string->number` の基数は §4.7。** 2、8、16 は正確な整数だけ。引数1個と基数 10 は今の10進のまま。リーダに `#x` は足さない。
@@ -898,7 +905,7 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - **`scheme14/scheme14.exe` のパスを動かさない。** この Makefile とテストがここを指している。
 - 決定74 — `code` 特殊形式は入れない。有理数も入れない（§2.3）。
 - 決定57 — **性能の候補を足す前に、命令の実行回数を数える。** `make -C scheme14 bench` だけを見て判断しない。§5.3 の赤黒木の行は36日目より前の値なので、決定164 と直接比べない。
-- **赤黒木 `rbtree_lib_improved.scm` は信頼してよい**（2026-10-02 の続報）。整数キーで、手続きが返した根を次へ渡す。無いキーの削除が形を動かすことと、`rb-search` が `false` を値と不在の両方に返すことは、直さない。
+- **赤黒木 `rbtree_lib_improved.scm` は信頼してよい**（2026-10-02 の続報。2026-10-07 にキーの領域を足した）。ノード向けの `rb-insert` などは数のまま、手続きが返した根を次へ渡す。データベース用はハンドルで、`rb-new-number` / `rb-new-string` / `rb-new-mixed`。数と文字列は一致しない。領域外のキーは `error` を呼ぶ。scheme14 では `guard` で受けられ、その挿入の続きは走らない。無いキーの削除が形を動かすことと、`rb-search` が `false` を値と不在の両方に返すことは、直さない。使い方は `scheme12_debug解説.md` §10.1.8 と `scheme14解説.md` 第5節・第6節。経緯はログの 2026-10-07。
 - 決定165 — `scheme13開発.txt` もこのログも、現行の未着手ではない。
 
 ---
@@ -910,16 +917,17 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 開発環境は Windows（w64devkit / MinGW）。ビルドは `make -C scheme14`。Linux では同じコマンドが `Makefile.linux` を読む。
 
 - `scheme14/scheme14.cpp` — セクション 1〜12 は実装済み。読む順序は §3。ファイル上だけ命令セット（9）がコンパイラ（8）より前にある（決定24）。並べ直さない。
-- `scheme14/lib14.scm` — 起動時に `system_lib.scm` の後で読む。R5RS 外は `exit` / `quit` だけ（決定65）。差し替えは `SCHEME14_LIB14`。`system_lib.scm` の差し替えは `SCHEME14_LIB`。
+- `scheme14/lib14.scm` — 起動時に `system_lib.scm` の後で読む。R5RS 外は `exit` / `quit`（決定65）と、2026-10-07 の `with-exception-handler` / `guard` / `raise` / `raise-continuable`。差し替えは `SCHEME14_LIB14`。`system_lib.scm` の差し替えは `SCHEME14_LIB`。
 - 実行ファイルは、Windows では `scheme14/scheme14.exe`。GC の DLL はその隣に置く。Linux では `scheme14/scheme14`。2026-10-03 に WSL2 でビルドできた。
 - 標準出力と標準エラーはテキストモードで、改行は CRLF。ゴールデンも CRLF。
 - 数は正確な整数と不正確な実数。有理数と複素数は無い。`(+ 1 1.5)` は `2.5`、`(/ 7 2)` は `3`、`(/ 7 2.0)` は `3.5`、`(sqrt 2)` は `1.4142135623730951`、`(sqrt 16)` は `4`、`(expt 2 -3)` は `0.125`。
-- 大域名 280、プリミティブ 144、`lib14.scm` の定義 75。29日目は 275 / 139 / 75。増分は `eval` と環境の4手続き、および `system` である。測り方は決定40。
+- 大域名 290、プリミティブ 150、`lib14.scm` の `define` は 78、マクロは `guard` の1つ。`(globals)` の `(PRIMITIVE ...)` を数えた。2026-10-02 夜は 280 / 144 / 75。増分は例外ハンドラの6プリミティブと、`with-exception-handler`、`raise`、`raise-continuable`、`guard`。
 - `tests/spec_test.scm` は §2 の各行を1行ずつ写している。§2 を改めたら、同じ順序で直す。
 - `scheme13解説.md` は scheme13 時点の説明である。scheme14 で足した機能の解説は `scheme14解説.md`。振る舞いを変えたら、変わった側の文書を追随する。ずれやすいのは命令一覧、プリミティブの数、テストの件数、互換性、R5RS の不足。正本は §2 とこの §7。
 - `system` は 2026-10-02 に §4.6 で入れた。呼び出しは `(system program arg ...)`。
 - `number->string` と `string->number` は、2026-10-03 に §4.7 の第2引数を受け付ける。2、8、16 は正確な整数だけである。
 - 準クオートはネストする（§4.8。2026-10-04）。カンマは同じ深さのバッククオートだけを打ち消す。表示は `(quasiquote ...)` のままである。`--selftest` は 379 checks, 0 failed。`compare` は 15 passed、`test` は 42 passed。
+- 共有の赤黒木は 2026-10-07 に、数・文字列・混合のハンドルを足した。ノード向け API は数のまま。同じ日に `with-exception-handler` を足した。拒否3本は `guard` で受けて終了コード 0。`bash scheme14/tests/run_golden.sh scheme14/scheme14.exe` は **50 passed, 0 failed**。`--selftest` は 379 checks, 0 failed。
 
 2026-10-01 に、この Windows で走らせた結果:
 
@@ -997,6 +1005,6 @@ scheme14/scheme14.exe --load scheme14/tests/system_win_test.scm
   読解メモ: [`micro_scheme8_notes.md`](micro_scheme8_notes.md)
   実行: `sbcl --script micro_Scheme8.lisp`（リポジトリのルートで。`quit` で終了）
 - scheme12 で直した不具合の経緯: `git log` の `4bf8ed6`〜`05f7cf8`
-- scheme14 で足した機能: [`scheme14解説.md`](scheme14解説.md)（`eval` と `system` と、数と文字列の基数と、準クオートのネスト）
+- scheme14 で足した機能: [`scheme14解説.md`](scheme14解説.md)（`eval` と `system` と、数と文字列の基数と、準クオートのネストと、共有赤黒木のキーと、`with-exception-handler`）
 - 決定の全文: [`log/decisions.md`](log/decisions.md)（**現行の作業指示ではない。**）
 - 利用者の作業指示の控え: `scheme13開発.txt`（**現行の仕様ではない。** 決定165）

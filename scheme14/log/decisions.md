@@ -4557,3 +4557,49 @@ bash scheme14/tests/run_golden.sh scheme14/scheme14-selftest.exe
 
 増分は §4.8 の 9 件である。深さ 1 の展開 4 件の文字列は以前のままである。
 
+### 2026-10-07 — 赤黒木に文字列キーと混合キーを足した
+
+利用者の依頼。共有の `rbtree_lib_improved.scm` はデータベースの索引にするつもりで、キーが数だけなのでは足りない。原型は Fncalc9 の `rbtree4.cal` で、比較関数を木に持たせられる（RB-07）。36日目の決定163は、ハンドルにすると既存の呼び出しが書き換わるので比較関数を採らなかった。2026-10-02 の続報も、比較関数・サイズ・永続版を足す案を却下している。ノード向け API を残したまま、ハンドルを横に足す。
+
+**数と文字列は一致させない。** `123` と `"123"` を同じキーにすると、数の順 `3 < 20 < 100` と文字列の順 `"100" < "20" < "3"` が一つの木で同時に成り立たない。混合の木は、数をすべて文字列より前に置き、型をまたいだ比較は 0 を返さない。数に揃えたいときは、木に入れる前に変換する。
+
+- ノード向けの `rb-insert` / `rb-search` / `rb-delete` / `rb-contains?` は `<` `=` `>` のまま。ハッシュ表と、4万件の測定はここを通る。比較関数の呼び出しは足していない
+- ハンドルは長さ 2 のベクタ `(根 比較関数)`。`rb-new-number`、`rb-new-string`、`rb-new-mixed`、`rb-new-with`。操作は `rb-db-insert` 以下
+- 領域の外のキーは、木を書く前に `error` で止まる。空の木は比較が走らないので、最初のキーは自分自身と比べてから挿入する
+- 数のハンドルは、比較関数が `rb-cmp-number` そのもののとき、既存の `rb-insert` に直結する
+- **採らなかったもの。** 上流の永続版、`size`、`rank` / `select`、破壊更新と永続更新の混用検出。シンボルを組込みの領域に入れること。`rb-insert` がキーの型を見て比較を切り替えること
+
+使い方は `scheme14解説.md` 第5節と `scheme13解説.md` 第10.8節。手続きの一覧と試験の表は `scheme12_debug解説.md` §10.1.8 と第17節。正本の §6 の赤黒木の行と §7 の件数を、この日の事実に合わせた。
+
+期待出力は `scheme13/tests/golden/` と `scheme14/tests/golden/` に同じバイトで置いた。成功2本は両ランナーの `FILES`、拒否3本は `OWN_TESTS`（終了コード 1）である。既存資産12件の床には入れていない。一覧は `tests/golden/README.md`。
+
+**この Windows で確認した。処理系は無変更。**
+
+| 確認 | 結果 |
+| --- | --- |
+| `rbtree_key_test.scm` | 58/58。scheme12・scheme13・scheme14 で出力がバイト一致 |
+| `rbtree_mixed_stress_test.scm` | 17/17。乱択 2500 回と、0..299 のペア 600 個。三処理系でバイト一致 |
+| 拒否3本 | 終了コード 1。scheme13 と scheme14 でバイト一致 |
+| `rbtree_robustness_test.scm` | 既存の期待出力とバイト一致 |
+| `bash scheme14/tests/run_golden.sh scheme14/scheme14.exe` | **47 passed, 0 failed** |
+
+同じ日のあとで `with-exception-handler` を足した。その時点の件数は次の節の **50 passed, 0 failed** である。
+
+scheme13 の同じランナーは、赤黒木の新旧はすべて通り、`scheme13/tests/deep_test.scm` だけが `/dev/null` を開けずに落ちた。この Windows では捨て先が `NUL` でないと開かない。scheme14 の `deep_test.scm` は既に `NUL` で、こちらは通った。今回の変更では触っていない。
+
+### 2026-10-07 — `with-exception-handler` を入れた
+
+8日目は、`error` を見出しを出して止まる報告口にした。呼び出し元が受けて続きを実行する使い方は、面前に無かった。赤黒木が領域外のキーで `error` を呼ぶと、拒否を結果にして外側へ進めない。その判断を取り下げた。
+
+`with-exception-handler`、`raise`、`raise-continuable`、`guard` を `lib14.scm` に置いた。ハンドラの箱は大域の1個で、`dynamic-wind` が付け替える。継続に新しいスナップショットは足していない。プリミティブから `VM::run` へは再入しない。
+
+- 実行中の `error`、型エラー、ゼロ除算はハンドラへ渡す。`eval` の式のコンパイル中も渡す
+- リーダのエラーと `internal error` は、ハンドラがあっても止まる
+- ハンドラが無いときは、今の `Fatal error:` と終了コード 1 のままである
+- `error` の次の式へは戻らない。ハンドラが値を返すと `exception handler returned` を外側へ上げる。見出しは §4.2 に足した
+- 赤黒木は今どおり `error` を呼ぶ。拒否3本は `guard` で受け、終了コード 0 にした。数の `123` は残る。scheme13 には `guard` が無いので、その3本は scheme13 のランナーから外した
+
+使い方は `scheme14解説.md` 第6節。
+
+この Windows で確認した。`--selftest` は 379 checks, 0 failed。大域名 290、プリミティブ 150、`lib14.scm` の `define` は 78、マクロは `guard`。`bash scheme14/tests/run_golden.sh scheme14/scheme14.exe` は **50 passed, 0 failed**。ハンドラが無い `errors/` のゴールデンは、そのまま通った。
+

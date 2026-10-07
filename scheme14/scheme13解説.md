@@ -1627,20 +1627,36 @@ scheme13: warning: system_lib.scm not found; the shared library
 ### 10.8 データ構造ライブラリ
 
 `rbtree_lib_improved.scm`（赤黒木）と `hashtable_lib.scm`（ハッシュテーブル）は
-**scheme12 から一字も変わっていない共有資産**で、scheme13 でもそのまま動く
-（ゴールデンで確認済み。第12章）。
+scheme12 と共有している。処理系のソースは触っていない。ハッシュ表は、
+ハッシュ値という数をノード向けの `rb-insert` に渡す。この経路のキーは数のままである。
 
-アルゴリズムの詳細解説は `scheme12_debug解説.md` の §10 と付録C にある。
-**同じ内容をここに複製しない。** 二重管理はずれる元で、あちらの記述は
-ファイルが変わっていない限り有効である。
-
-使い方だけ挙げておく:
+2026-10-07 に、データベース用のハンドルを足した。比較関数は木が持つ。
+数と文字列は一致しない。`123` と `"123"` は別のキーである。
+領域外のキーは、木を書く前に `error` を呼ぶ。scheme14 では
+`scheme14解説.md` 第6節の `guard` で受けられる。`error` の次の行へは戻らない。
+手続きの一覧、混合の並び、採らなかった案は `scheme12_debug解説.md` の
+§10.1.8 と第17節にある。**アルゴリズムの解説はここに複製しない。**
 
 ```scheme
 (load "rbtree_lib_improved.scm")
-(define t (rb-empty))
-(set! t (rb-insert t 5 'five))
-(rb-lookup t 5)
+
+;; 数。返った根を次の呼び出しに渡す。
+(define t RB-NIL)
+(set! t (rb-insert t 5 "five"))
+(rb-search t 5)          ; => "five"
+
+;; 文字列。辞書順。
+(define s (rb-new-string))
+(rb-db-insert s "b" 2)
+(rb-db-insert s "a" 1)
+(rb-db-to-list s)        ; => ("a" "b")
+
+;; 数と文字列。数をすべて文字列より前に置く。
+(define m (rb-new-mixed))
+(rb-db-insert m 123 "num")
+(rb-db-insert m "123" "str")
+(rb-db-search m 123)     ; => "num"
+(rb-db-search m "123")   ; => "str"
 ```
 
 ### 10.9 ポート

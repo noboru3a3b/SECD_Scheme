@@ -146,10 +146,12 @@ Environment: 1 frame(s)
 
 === Macros ===
 delay
+guard
 ==============
 
 === Macros ===
 delay
+guard
 unless
 ==============
 Trace mode: ON
