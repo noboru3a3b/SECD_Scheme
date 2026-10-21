@@ -17,43 +17,6 @@ The actual actions taken are as follows:
 
 - At this point, there weren't many working primitives, but the fact that the continuation of multishots was entirely handled by the SECD VM was a significant advantage.
 
-- Afterwards, I consulted with another AI (Claude 4.5 Sonnet) and had them switch the GC from a reference counter-based approach to using Boehm GC.
-
-- I also consulted with him about infinite-precision integers, and he implemented infinite-precision integers using the Boost library.
-
-- During this time, GitHub Copilot acted as an AI with limbs, responsible for the implementation, testing, and debugging of the C++ version.
-
-- I asked Claude 4.5 Sonnet to implement file input/output functionality. He got it working perfectly with just one try.
-
-- After that, We implemented string and vector manipulation. Author: Claude 4.5 Sonnet.
-
-- After that, We implemented Debugger in System. Author: Claude 4.5 Sonnet.
-
-- Then, we had GPT-5 Thinking create the system's instruction manual. It turned out he was incredibly clever.
-
-- Implemented a red-black tree library and wrote test scripts. Author: Claude 4.5 Sonnet.  
-  
-- Also implemented a random number generation function in the system for stress testing of the red-black tree. Author: Claude 4.5 Sonnet.  
-  
-- Based on the red-black tree library, we implemented a hash table library. Author: Claude 4.5 Sonnet.  
-  
-- GPT-5 Thinking evaluated the current system. Based on the results, Claude 4.5 Sonnet modified the system as follows.  
-  
-- Modified the system to correctly handle lists containing circular references. Author: Claude 4.5 Sonnet.  
-  
-- Improved the hash table library so that values ​​are not overwritten unless the keys are identical. Author: Claude 4.5 Sonnet.  
-  
-- Speeded up LD/LSET instructions (reduced access time to O(1)) by vectorizing the environment frame. Author: Claude 4.5 Sonnet.  
-  
-- We've made several improvements, so We've updated the system manual. Author: Claude 4.5 Sonnet.
-  
-- We added NetBSD-8.2-i386 as a build and test environment. Author: Claude Sonnet 4.6.  
-
-- To create an ideal environment on NetBSD running on a Pentium-M, I enlisted the help of AI.
-I had the AI ​​summarize the development process in a document called "NetBSD_Development_Guide.md".
-  
-- I have improved the red-black tree library to the point where it can serve as the foundation for a database. Author: Claude Code Sonnet 5.   
-  
 - Rewrote the whole interpreter from scratch as scheme13, this time with a single designer and a design journal carried across sessions. The existing .scm assets run unchanged, and calls became about 31 times faster. Author: Claude Opus 5.  
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
