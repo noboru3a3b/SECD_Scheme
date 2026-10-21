@@ -6,8 +6,6 @@ During the development of SECD_Scheme8, efforts were made to process multi-shot 
 It ended up being processed with the eval interpreter.
 
 Therefore, with a fresh start, SECD_Scheme was developed with the focus on processing everything, including multi-shot continuations, with the SECD vm.
-This time, we also devised a way to use AI: the AI ​​with limbs handled the implementation work, while the intelligent AI handled the basic design.
-The actual actions taken are as follows:
 
 - I consulted with Cursor's AI about writing a C++ version of a Scheme compiler that processes everything on the VM.
 
