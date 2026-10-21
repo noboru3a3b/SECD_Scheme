@@ -13,7 +13,7 @@ The actual actions taken are as follows:
 
 - I provided micro_Scheme8.lisp, mlib7.scm, and test-case6.scm as reference implementations.
 
-- As a result, a C++ version of the Scheme compiler started working, which could process everything on the VM (although garbage collection was done using a reference counter method).
+- As a result, a C++ version of the Scheme compiler started working, which could process everything on the VM.
 
 - At this point, there weren't many working primitives, but the fact that the continuation of multishots was entirely handled by the SECD VM was a significant advantage.
 
