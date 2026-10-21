@@ -17,7 +17,7 @@ The actual actions taken are as follows:
 
 - At this point, there weren't many working primitives, but the fact that the continuation of multishots was entirely handled by the SECD VM was a significant advantage.
 
-- Rewrote the whole interpreter from scratch as scheme13, this time with a single designer and a design journal carried across sessions. The existing .scm assets run unchanged, and calls became about 31 times faster. Author: Claude Opus 5.  
+- Rewrote the whole interpreter from scratch as scheme13, this time with a single designer and a design journal carried across sessions. The existing .scm assets run unchanged, and calls became about 31 times faster. 
   
 SECD_Scheme is not something I created; it's a C++ version of a Scheme compiler that uses the complete SECD VM method, developed through the collaboration of various AIs.  
   
