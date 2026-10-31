@@ -135,6 +135,71 @@ Further reading: `scheme13/scheme13解説.md` (implementation manual) and
 `scheme13/dev_memo.md` (design charter, frozen spec, decision log). Both are in
 Japanese.
 
+## Building scheme14
+
+`scheme14/scheme14.cpp` is a single C++17 translation unit. It needs Boehm GC (`-lgc -lgccpp`) and the Boost.Multiprecision headers (`cpp_int` only; nothing from Boost is linked). `make` in the repository root still builds scheme13. scheme14 is built from `scheme14/`.
+
+After a successful build, start the binary from the repository root. It loads `system_lib.scm` from the root and `scheme14/lib14.scm` next to the source. Both are also found relative to the executable. `SCHEME14_LIB` and `SCHEME14_LIB14` each replace one of those searches with an explicit path.
+
+### Windows 11 (w64devkit, g++)
+
+The compiler and `C:\boost_1_91_0` are the ones listed above. GC is the tree in `gc-8.2.12/` (headers in `include`, import libraries and `libgc-1.dll` / `libgccpp-1.dll` in `.libs`).
+
+```
+make -C scheme14
+.\scheme14\scheme14.exe
+```
+
+`scheme14/Makefile` sees `Windows_NT` and writes `scheme14\scheme14.exe`. It copies the two GC DLLs next to that executable. The Windows loader looks there first, so `cd scheme14` and `.\scheme14.exe` works as well. A prompt that returns with no output means those DLLs are not beside the `.exe`.
+
+```
+make -C scheme14 selftest
+make -C scheme14 test
+make -C scheme14 sicp
+make -C scheme14 bench
+```
+
+`make -C scheme14 compare` also needs `scheme12_debug`, built at the root with `make scheme12`.
+
+### Linux (clang++)
+
+On any OS other than Windows, `scheme14/Makefile` includes `scheme14/Makefile.linux`. The command is the same, and the binary has no extension:
+
+```
+make -C scheme14
+./scheme14/scheme14
+```
+
+The makefile passes `-I/usr/local/include -L/usr/local/lib` for GC and `-I/usr/include` for Boost. When GC is not installed under `/usr/local`, the compiler's default search finds the distribution package. That is how the WSL2 build was done. On Ubuntu the packages are the ones the CI job installs for scheme13:
+
+```
+sudo apt-get install clang libboost-dev libgc-dev
+```
+
+`selftest`, `test`, `sicp`, and `bench` are the same targets. For `compare`, build scheme12 with `make -f Makefile.linux scheme12`.
+
+### FreeBSD (clang++)
+
+`make -C scheme14` on FreeBSD reads `Makefile.linux`, whose Boost path is `/usr/include`. Pass `scheme14/Makefile.freebsd` instead. The compiler, include paths, and libraries are the same as the root `Makefile.freebsd`: base clang, Boehm GC in `/usr/local`, Boost headers in `/usr/local/include/boost`.
+
+```
+make -C scheme14 -f Makefile.freebsd
+./scheme14/scheme14
+```
+
+`selftest`, `test`, `sicp`, and `bench` take the same `-f Makefile.freebsd`. For `compare`, build scheme12 from the repository root with `make -f Makefile.freebsd scheme12`. scheme14 has not been started on the FreeBSD machine yet.
+
+### NetBSD (pkgsrc gcc 8)
+
+`make -C scheme14` on NetBSD also reads `Makefile.linux`. Pass `scheme14/Makefile.netbsd`. It uses pkgsrc gcc 8 (`/usr/pkg/gcc8/bin/g++`), with Boehm GC and Boost headers under `/usr/pkg`, and `-rpath` so `libgc` is found without `LD_LIBRARY_PATH`. The base compiler on NetBSD 8 is not the one this tree uses. How that machine was set up is in `NetBSD_Development_Guide.md`.
+
+```
+make -C scheme14 -f Makefile.netbsd
+./scheme14/scheme14
+```
+
+`selftest`, `test`, `sicp`, and `bench` take the same `-f Makefile.netbsd`. For `compare`, build scheme12 from the repository root with `make -f Makefile.netbsd scheme12`. scheme14 has not been started on the NetBSD machine yet.
+
 ## Usage:
 
 ```

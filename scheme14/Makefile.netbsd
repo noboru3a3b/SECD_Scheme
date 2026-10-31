@@ -1,0 +1,68 @@
+# scheme14 — NetBSD でのビルド。
+#
+#     make -C scheme14 -f Makefile.netbsd
+#
+# `make -C scheme14` だけだと scheme14/Makefile が Makefile.linux を読む。
+# コンパイラもインクルードの場所も違うので、こちらを -f で指定する。
+# 実行ファイルは scheme14（拡張子なし）。
+#
+# フラグはリポジトリ直下の Makefile.netbsd と同じ:
+#   pkgsrc の gcc 8（/usr/pkg/gcc8/bin/g++）、Boehm GC と Boost ヘッダは /usr/pkg。
+#   -rpath は libgc を LD_LIBRARY_PATH なしで見つけるため。
+# BSD make で読めるように、GNU make だけの関数は使わない。
+
+CXX = /usr/pkg/gcc8/bin/g++
+
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Wno-unused-function
+
+GC_INCLUDE = -I/usr/pkg/include
+
+BOOST_INCLUDE = -I/usr/pkg/include/boost
+
+GC_LIB = -L/usr/pkg/lib -Wl,-rpath,/usr/pkg/lib -lgc -lgccpp -lstdc++fs
+
+TARGET = scheme14
+SOURCE = scheme14.cpp
+
+.PHONY: all clean selftest compare test sicp bench help
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE)
+	$(CXX) $(CXXFLAGS) $(GC_INCLUDE) $(BOOST_INCLUDE) -o $@ $< $(GC_LIB)
+
+# 凍結仕様（dev_memo.md §2）との突き合わせ。エラー本文と位置もここで見る。
+selftest: $(TARGET)
+	./$(TARGET) --selftest
+
+# 構文展開が scheme12 と等価かを突き合わせる。scheme12_debug のビルドが要る
+# （リポジトリのルートで make -f Makefile.netbsd scheme12）。
+compare: $(TARGET)
+	cd .. && ./scheme14/tests/compare_expand.sh ./scheme14/$(TARGET)
+
+# 既存 .scm 資産との互換性回帰（受け入れ基準そのもの）。
+test: $(TARGET)
+	cd .. && ./scheme14/tests/run_golden.sh ./scheme14/$(TARGET)
+
+sicp: $(TARGET)
+	cd .. && ./scheme14/sicp/run_sicp.sh ./scheme14/$(TARGET)
+
+# 呼び出し性能のベンチ。time は NetBSD の sh の予約語。
+bench: $(TARGET)
+	cd .. && printf '(define (loop i acc) (if (= i 0) acc (loop (- i 1) (+ acc 1))))\n(display (loop 1000000 0))\n(newline)\n' > scheme14/.bench.scm
+	cd .. && time ./scheme14/$(TARGET) --load scheme14/.bench.scm
+	rm -f .bench.scm
+
+clean:
+	rm -f $(TARGET) .bench.scm
+
+help:
+	@echo "scheme14 targets (NetBSD):"
+	@echo "  all      - ビルド（scheme14）"
+	@echo "  selftest - 凍結仕様との突き合わせ（C++ 単体の回帰）"
+	@echo "  compare  - 構文展開が scheme12 と等価かを突き合わせる"
+	@echo "  test     - 互換性回帰 + エラーの包み + REPL の筋道（受け入れ基準）"
+	@echo "  sicp     - SICP を教材にした回帰"
+	@echo "  bench    - 呼び出し性能のベンチ"
+	@echo "  clean    - 生成物を削除"
+	@echo "使い方: make -C scheme14 -f Makefile.netbsd"

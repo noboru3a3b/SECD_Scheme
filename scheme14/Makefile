@@ -12,6 +12,8 @@
 #
 # Linux ではこのファイルの中身は使わず、Makefile.linux を読む。
 # 実行ファイルは scheme14（拡張子なし）になる。
+# FreeBSD は Makefile.freebsd、NetBSD は Makefile.netbsd を
+# `make -f` で指定する。OS が Windows でないと、無指定では Makefile.linux になる。
 
 HERE := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 ROOT := $(patsubst %/,%,$(dir $(HERE)))
