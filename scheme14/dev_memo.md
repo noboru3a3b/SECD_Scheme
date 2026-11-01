@@ -632,7 +632,7 @@ R5RS 6.5 の4手続きを足す。`eval`、`interaction-environment`、`scheme-r
 
 ### 4.6 `system`（2026-10-02 に設計し、同日実装）
 
-原典 `micro_Scheme8.lisp` の外部コマンド実行を、手続き `system` として入れた。解説は [scheme14解説.md](scheme14解説.md)。Windows での実コマンド確認は `tests/system_win_test.scm`。Linux（WSL2）での確認は解説の §2.7 で、2026-10-03 に通った。
+原典 `micro_Scheme8.lisp` の外部コマンド実行を、手続き `system` として入れた。解説は [scheme14解説.md](scheme14解説.md)。Windows での実コマンド確認は `tests/system_win_test.scm`。Linux（WSL2）での確認は解説の `system` の Linux の節で、2026-10-03 に通った。
 
 `(system program arg ...)`。`program` と各 `arg` は文字列で、1個目は必須、2個目以降は何個でもよい。`(system "git" "status")` も `(system "git")` もこの形である。引数はデータであり、シェルのスクリプトではない。`&&` や `|` や引用符を、この手続きは解釈しない。
 
@@ -656,7 +656,7 @@ OS の名前は、この手続きの本体にだけ書く。Scheme から OS を
 
 ### 4.7 `number->string` と `string->number` の基数（2026-10-03 に設計し、同日実装）
 
-R5RS が許す第2引数のうち、**正確な整数を 2、8、16 で読み書きする分だけ**を足した。引数1個の呼び出しと、基数 10 は、今の10進の経路のままである。使い方は [scheme14解説.md](scheme14解説.md) の第3章。
+R5RS が許す第2引数のうち、**正確な整数を 2、8、16 で読み書きする分だけ**を足した。引数1個の呼び出しと、基数 10 は、今の10進の経路のままである。使い方は [scheme14解説.md](scheme14解説.md) の「数と文字列の基数」。
 
 第2引数は正確な整数で、値は 2、8、10、16 のいずれかである。省略したときは 10 とみなす。個数は `need_args` で 1 から 2 にする。0 個や 3 個以上は `wrong number of arguments`、`expected: 1 to 2 arguments`。
 
@@ -905,7 +905,7 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - **`scheme14/scheme14.exe` のパスを動かさない。** この Makefile とテストがここを指している。
 - 決定74 — `code` 特殊形式は入れない。有理数も入れない（§2.3）。
 - 決定57 — **性能の候補を足す前に、命令の実行回数を数える。** `make -C scheme14 bench` だけを見て判断しない。§5.3 の赤黒木の行は36日目より前の値なので、決定164 と直接比べない。
-- **赤黒木 `rbtree_lib_improved.scm` は信頼してよい**（2026-10-02 の続報。2026-10-07 にキーの領域を足した）。ノード向けの `rb-insert` などは数のまま、手続きが返した根を次へ渡す。データベース用はハンドルで、`rb-new-number` / `rb-new-string` / `rb-new-mixed`。数と文字列は一致しない。領域外のキーは `error` を呼ぶ。scheme14 では `guard` で受けられ、その挿入の続きは走らない。無いキーの削除が形を動かすことと、`rb-search` が `false` を値と不在の両方に返すことは、直さない。使い方は `scheme12_debug解説.md` §10.1.8 と `scheme14解説.md` 第5節・第6節。経緯はログの 2026-10-07。
+- **赤黒木 `rbtree_lib_improved.scm` は信頼してよい**（2026-10-02 の続報。2026-10-07 にキーの領域を足した）。ノード向けの `rb-insert` などは数のまま、手続きが返した根を次へ渡す。データベース用はハンドルで、`rb-new-number` / `rb-new-string` / `rb-new-mixed`。数と文字列は一致しない。領域外のキーは `error` を呼ぶ。scheme14 では `guard` で受けられ、その挿入の続きは走らない。無いキーの削除が形を動かすことと、`rb-search` が `false` を値と不在の両方に返すことは、直さない。使い方は `scheme12_debug解説.md` §10.1.8 と `scheme14解説.md` の「共有の赤黒木」「例外」。経緯はログの 2026-10-07。
 - 決定165 — `scheme13開発.txt` もこのログも、現行の未着手ではない。
 
 ---
@@ -923,7 +923,7 @@ scheme12 とのバイト一致から外し、決定27・32で採り直した。�
 - 数は正確な整数と不正確な実数。有理数と複素数は無い。`(+ 1 1.5)` は `2.5`、`(/ 7 2)` は `3`、`(/ 7 2.0)` は `3.5`、`(sqrt 2)` は `1.4142135623730951`、`(sqrt 16)` は `4`、`(expt 2 -3)` は `0.125`。
 - 大域名 290、プリミティブ 150、`lib14.scm` の `define` は 78、マクロは `guard` の1つ。`(globals)` の `(PRIMITIVE ...)` を数えた。2026-10-02 夜は 280 / 144 / 75。増分は例外ハンドラの6プリミティブと、`with-exception-handler`、`raise`、`raise-continuable`、`guard`。
 - `tests/spec_test.scm` は §2 の各行を1行ずつ写している。§2 を改めたら、同じ順序で直す。
-- `scheme13解説.md` は scheme13 時点の説明である。scheme14 で足した機能の解説は `scheme14解説.md`。振る舞いを変えたら、変わった側の文書を追随する。ずれやすいのは命令一覧、プリミティブの数、テストの件数、互換性、R5RS の不足。正本は §2 とこの §7。
+- `scheme14解説.md` が scheme14 の実装解説である。単独で読める。`scheme13解説.md` は保存してある前の版の説明である。振る舞いを変えたら `scheme14解説.md` を追随する。ずれやすいのは命令一覧、プリミティブの数、テストの件数、互換性、R5RS の不足。正本は §2 とこの §7。
 - `system` は 2026-10-02 に §4.6 で入れた。呼び出しは `(system program arg ...)`。
 - `number->string` と `string->number` は、2026-10-03 に §4.7 の第2引数を受け付ける。2、8、16 は正確な整数だけである。
 - 準クオートはネストする（§4.8。2026-10-04）。カンマは同じ深さのバッククオートだけを打ち消す。表示は `(quasiquote ...)` のままである。`--selftest` は 379 checks, 0 failed。`compare` は 15 passed、`test` は 42 passed。
@@ -950,7 +950,7 @@ scheme14/scheme14.exe --load scheme14/tests/system_win_test.scm
 
 `system_win_test.scm` はディレクトリの作成と表示、子プロセスでの作業ディレクトリ移動、ファイルの書き込みと読み戻し、空白を含む経路、`copy`、`move`、`del`、終了コード、無いディレクトリの非ゼロ終了を見ている。ゴールデンには入れていない。出力が OS に依存するためである。
 
-2026-10-03 に、WSL2 の Linux で走らせた結果。実行ファイルは `scheme14/scheme14`。`scheme14解説.md` §2.7 の式が通った。この日は `--selftest`、`compare`、`test`、`sicp` を測っていない。それらの最新の実測は、上の Windows の結果である。
+2026-10-03 に、WSL2 の Linux で走らせた結果。実行ファイルは `scheme14/scheme14`。`scheme14解説.md` の `system` の Linux の節の式が通った。この日は `--selftest`、`compare`、`test`、`sicp` を測っていない。それらの最新の実測は、上の Windows の結果である。
 
 - `(system "mkdir" "work")`、`(system "ls" "-l" "work")`、`(system "cat" "work/note.txt")`、`(system "cp" ...)`、`(system "mv" ...)`、`(system "rm" "work/note.txt")` は 0。`grep` へ渡した `"hello from"` は1引数のままで、値は 0。
 - `sh -c` で書いた `work/note.txt` を `read-line` すると `"hello from system"`。`cd work/sub` のあと `../cwd.txt` に書いた行の末尾は `"/sub"`。空白を含むパスへ書いたファイルは `"spaced"`。
@@ -967,7 +967,7 @@ scheme14/scheme14.exe --load scheme14/tests/system_win_test.scm
 
 未着手は次だけ。終えた手順はここに書き戻さない。記録はログにある。
 
-1. **FreeBSD / NetBSD での起動確認。** 利用者の手元でしか建てられない。通ったと書かず、確かめたら §7 に書く。Windows は起動まで確認済み。Linux（WSL2）は 2026-10-03 にビルドと、`scheme14解説.md` §2.7 の式まで確認済み。
+1. **FreeBSD / NetBSD での起動確認。** 利用者の手元でしか建てられない。通ったと書かず、確かめたら §7 に書く。Windows は起動まで確認済み。Linux（WSL2）は 2026-10-03 にビルドと、`scheme14解説.md` の `system` の Linux の節の式まで確認済み。
 2. **原典にあってまだ入れていないもの。** 利用者判断で、急がない。
    - `print` — 3行。`test-case6.scm` は使っていない。
    - `compile-print` — `(compile expr)` と重複が大きい。見送りでよい。
@@ -1005,6 +1005,6 @@ scheme14/scheme14.exe --load scheme14/tests/system_win_test.scm
   読解メモ: [`micro_scheme8_notes.md`](micro_scheme8_notes.md)
   実行: `sbcl --script micro_Scheme8.lisp`（リポジトリのルートで。`quit` で終了）
 - scheme12 で直した不具合の経緯: `git log` の `4bf8ed6`〜`05f7cf8`
-- scheme14 で足した機能: [`scheme14解説.md`](scheme14解説.md)（`eval` と `system` と、数と文字列の基数と、準クオートのネストと、共有赤黒木のキーと、`with-exception-handler`）
+- 実装解説: [`scheme14解説.md`](scheme14解説.md)（scheme14 単独で読める。`eval`、`system`、基数、準クオートのネスト、共有赤黒木、`with-exception-handler` を含む）
 - 決定の全文: [`log/decisions.md`](log/decisions.md)（**現行の作業指示ではない。**）
 - 利用者の作業指示の控え: `scheme13開発.txt`（**現行の仕様ではない。** 決定165）
